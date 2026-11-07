@@ -25,6 +25,13 @@ struct AudioUrl {
 
 class NeteaseApi {
 public:
+	// 登录：手机号 + 密码（密码在内部做 MD5），成功后保存 Cookie 供后续请求使用
+	bool Login(const std::string& phone, const std::string& password,
+		std::string* nickname, std::string* cookie, std::string* error);
+	bool IsLoggedIn() const;
+	void SetCookie(const std::string& cookie);
+	std::string Cookie() const;
+
 	// POST /weapi/search/get
 	bool Search(const std::string& keyword, int limit, std::vector<Song>* songs,
 		std::string* error);

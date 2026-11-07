@@ -17,6 +17,14 @@ size_t WriteToString(void* contents, size_t size, size_t count, void* userData)
 	return total;
 }
 
+size_t CollectHeader(char* data, size_t size, size_t count, void* userData)
+{
+	const size_t total = size * count;
+	auto* headers = static_cast<std::string*>(userData);
+	headers->append(data, total);
+	return total;
+}
+
 struct curl_slist* BuildHeaders(const std::vector<std::string>& headers)
 {
 	struct curl_slist* list = nullptr;
@@ -82,6 +90,8 @@ Response PostForm(const std::string& url, const std::string& body,
 		static_cast<long>(body.size()));
 	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, WriteToString);
 	curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response.body);
+	curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, CollectHeader);
+	curl_easy_setopt(handle, CURLOPT_HEADERDATA, &response.headers);
 
 	const CURLcode result = curl_easy_perform(handle);
 	if (result != CURLE_OK)

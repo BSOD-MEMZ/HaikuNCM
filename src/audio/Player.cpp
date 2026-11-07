@@ -18,6 +18,7 @@ struct Player::Impl {
 	media_raw_audio_format format;
 	int channels = 0;
 	float peak = 0.0f;
+	volatile int64 framesRendered = 0;
 	volatile bool finished = false;
 
 	static void Render(void* cookie, void* buffer, size_t size,
@@ -39,6 +40,8 @@ void Player::Impl::Render(void* cookie, void* buffer, size_t size,
 		self->finished = true;
 		return;
 	}
+
+	self->framesRendered += frames;
 
 	const float* samples = static_cast<float*>(buffer);
 	const size_t count = frames * format.channel_count;
@@ -164,6 +167,46 @@ void Player::Stop()
 bool Player::IsLoaded() const
 {
 	return fImpl->track != nullptr;
+}
+
+bool Player::IsPlaying() const
+{
+	return fImpl->output != nullptr;
+}
+
+double Player::DurationSeconds() const
+{
+	if (fImpl->track == nullptr)
+		return 0.0;
+	return fImpl->track->Duration() / 1000000.0;
+}
+
+double Player::PositionSeconds() const
+{
+	if (fImpl->format.frame_rate <= 0)
+		return 0.0;
+	return fImpl->framesRendered / static_cast<double>(fImpl->format.frame_rate);
+}
+
+bool Player::Seek(double seconds, std::string* error)
+{
+	if (fImpl->track == nullptr) {
+		if (error != nullptr)
+			*error = "尚未载入音频";
+		return false;
+	}
+
+	bigtime_t time = static_cast<bigtime_t>(seconds * 1000000.0);
+	fImpl->finished = false;
+	fImpl->framesRendered = 0;
+
+	const status_t status = fImpl->track->SeekToTime(&time);
+	if (status != B_OK) {
+		if (error != nullptr)
+			*error = std::string("定位失败: ") + strerror(status);
+		return false;
+	}
+	return true;
 }
 
 std::string Player::Description() const

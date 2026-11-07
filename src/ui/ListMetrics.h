@@ -1,18 +1,42 @@
 #ifndef NCM_LIST_METRICS_H
 #define NCM_LIST_METRICS_H
 
+#include <Font.h>
 #include <InterfaceDefs.h>
 
 namespace ncm {
 namespace metrics {
 
-const float kRowHeight = 62.0f;
-const float kHeaderHeight = 28.0f;
-const float kCoverSize = 44.0f;
+// 一切尺寸和颜色都从系统取值：字号变了行高跟着变，配色跟着主题走。
+inline float RowHeight()
+{
+	return be_plain_font->Size() * 2.0f + 30.0f;
+}
 
-const float kIndexRight = 42.0f;
-const float kCoverX = 56.0f;
-const float kTextX = kCoverX + kCoverSize + 12.0f;
+inline float HeaderHeight()
+{
+	return be_plain_font->Size() + 14.0f;
+}
+
+inline float CoverSize()
+{
+	return RowHeight() - 16.0f;
+}
+
+inline float IndexRight()
+{
+	return be_plain_font->Size() * 2.6f;
+}
+
+inline float CoverX()
+{
+	return IndexRight() + 14.0f;
+}
+
+inline float TextX()
+{
+	return CoverX() + CoverSize() + 10.0f;
+}
 
 inline float AlbumX(float width)
 {
@@ -29,29 +53,36 @@ inline float DurationRight(float width)
 	return width - 20.0f;
 }
 
-inline rgb_color SelectionColor()
+// 原生控件用的系统颜色，不自己发明配色
+inline rgb_color Background()
 {
-	return (rgb_color){ 232, 240, 254, 255 };
+	return ui_color(B_LIST_BACKGROUND_COLOR);
 }
 
-inline rgb_color PrimaryText()
+inline rgb_color SelectionBackground()
 {
-	return (rgb_color){ 34, 34, 34, 255 };
+	return ui_color(B_LIST_SELECTED_BACKGROUND_COLOR);
 }
 
+inline rgb_color Text()
+{
+	return ui_color(B_LIST_ITEM_TEXT_COLOR);
+}
+
+inline rgb_color SelectedText()
+{
+	return ui_color(B_LIST_SELECTED_ITEM_TEXT_COLOR);
+}
+
+// 次要信息：用同一个文字色往背景方向淡化，暗色主题下也成立
 inline rgb_color SecondaryText()
 {
-	return (rgb_color){ 138, 138, 138, 255 };
+	return tint_color(ui_color(B_LIST_ITEM_TEXT_COLOR), B_LIGHTEN_1_TINT);
 }
 
 inline rgb_color Accent()
 {
-	return (rgb_color){ 214, 51, 60, 255 };
-}
-
-inline rgb_color RowBackground()
-{
-	return (rgb_color){ 255, 255, 255, 255 };
+	return ui_color(B_FAILURE_COLOR);
 }
 
 } // namespace metrics

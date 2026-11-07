@@ -18,16 +18,35 @@ const char* kSongUrlEndpoint =
 	"https://interface3.music.163.com/eapi/song/enhance/player/url/v1";
 const char* kSongUrlPath = "/api/song/enhance/player/url/v1";
 
-const std::vector<std::string>& ApiHeaders()
+std::string gCookie;
+
+std::vector<std::string> BuildApiHeaders()
 {
-	static const std::vector<std::string> headers = {
+	std::string cookie = "os=pc; appver=8.9.70; channel=netease";
+	if (!gCookie.empty())
+		cookie += "; " + gCookie;
+
+	return {
 		"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 		"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 		"Referer: https://music.163.com",
-		"Cookie: os=pc; appver=8.9.70; channel=netease",
+		"Cookie: " + cookie,
 		"Content-Type: application/x-www-form-urlencoded",
 	};
-	return headers;
+}
+
+std::string ExtractCookie(const std::string& headers, const std::string& name)
+{
+	const std::string key = name + "=";
+	size_t position = headers.find(key);
+	if (position == std::string::npos)
+		return std::string();
+
+	position += key.size();
+	size_t end = headers.find_first_of(";\r\n", position);
+	if (end == std::string::npos)
+		end = headers.size();
+	return headers.substr(position, end - position);
 }
 
 const std::vector<std::string>& DownloadHeaders()
@@ -56,7 +75,7 @@ void FetchCovers(std::vector<Song>* songs)
 		+ "&encSecKey=" + UrlEncode(form.encSecKey);
 
 	const Response response = PostForm("https://music.163.com/weapi/v3/song/detail",
-		body, ApiHeaders());
+		body, BuildApiHeaders());
 	if (!response.Ok())
 		return;
 
@@ -97,6 +116,84 @@ std::string PickString(const json& object, const char* first, const char* second
 
 } // namespace
 
+bool NeteaseApi::Login(const std::string& phone, const std::string& password,
+	std::string* nickname, std::string* cookie, std::string* error)
+{
+	const json payload = {
+		{ "phone", phone },
+		{ "password", Md5Hex(password) },
+		{ "countrycode", "86" },
+		{ "rememberLogin", "true" },
+	};
+
+	const WeapiForm form = Weapi(payload.dump());
+	const std::string body = "params=" + UrlEncode(form.params)
+		+ "&encSecKey=" + UrlEncode(form.encSecKey);
+
+	const Response response = PostForm("https://music.163.com/weapi/login/cellphone",
+		body, BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON 解析失败: ") + exception.what();
+		return false;
+	}
+
+	const int code = document.value("code", -1);
+	if (code != 200) {
+		if (error != nullptr) {
+			std::string message = document.value("message", "");
+			if (!document.contains("msg") && message.empty())
+				message = "登录被拒";
+			*error = message + "（code " + std::to_string(code) + "）";
+		}
+		return false;
+	}
+
+	const std::string musicU = ExtractCookie(response.headers, "MUSIC_U");
+	const std::string csrf = ExtractCookie(response.headers, "__csrf");
+	if (musicU.empty()) {
+		if (error != nullptr)
+			*error = "登录响应里没有 MUSIC_U";
+		return false;
+	}
+
+	gCookie = "MUSIC_U=" + musicU;
+	if (!csrf.empty())
+		gCookie += "; __csrf=" + csrf;
+
+	if (cookie != nullptr)
+		*cookie = gCookie;
+	if (nickname != nullptr && document.contains("profile"))
+		*nickname = document["profile"].value("nickname", "");
+	return true;
+}
+
+bool NeteaseApi::IsLoggedIn() const
+{
+	return !gCookie.empty();
+}
+
+void NeteaseApi::SetCookie(const std::string& cookie)
+{
+	gCookie = cookie;
+}
+
+std::string NeteaseApi::Cookie() const
+{
+	return gCookie;
+}
+
 bool NeteaseApi::Search(const std::string& keyword, int limit,
 	std::vector<Song>* songs, std::string* error)
 {
@@ -111,7 +208,7 @@ bool NeteaseApi::Search(const std::string& keyword, int limit,
 	const std::string body = "params=" + UrlEncode(form.params)
 		+ "&encSecKey=" + UrlEncode(form.encSecKey);
 
-	const Response response = PostForm(kSearchUrl, body, ApiHeaders());
+	const Response response = PostForm(kSearchUrl, body, BuildApiHeaders());
 	if (!response.Ok()) {
 		if (error != nullptr)
 			*error = response.error.empty()
@@ -177,7 +274,7 @@ bool NeteaseApi::SongUrl(long long id, const std::string& level,
 
 	const std::string params = EapiParams(kSongUrlPath, payload.dump());
 	const Response response = PostForm(kSongUrlEndpoint,
-		"params=" + UrlEncode(params), ApiHeaders());
+		"params=" + UrlEncode(params), BuildApiHeaders());
 	if (!response.Ok()) {
 		if (error != nullptr)
 			*error = response.error.empty()

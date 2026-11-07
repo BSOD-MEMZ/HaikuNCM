@@ -2,50 +2,45 @@
 
 #include "ListMetrics.h"
 
-#include <Font.h>
+#include <Catalog.h>
+
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "SongHeader"
 
 using namespace ncm::metrics;
 
 SongHeader::SongHeader()
 	: BView("song-header", B_WILL_DRAW)
 {
-	SetViewColor(RowBackground());
-	SetLowColor(RowBackground());
-	SetExplicitMinSize(BSize(B_SIZE_UNSET, kHeaderHeight));
-	SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, kHeaderHeight));
-}
-
-SongHeader::~SongHeader()
-{
-	delete fFont;
+	SetViewColor(B_TRANSPARENT_COLOR);
+	SetLowColor(Background());
+	SetExplicitMinSize(BSize(B_SIZE_UNSET, HeaderHeight()));
+	SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, HeaderHeight()));
 }
 
 void SongHeader::AttachedToWindow()
 {
-	fFont = new BFont(be_plain_font);
-	fFont->SetSize(11.5f);
-	SetFont(fFont);
+	SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+	SetLowUIColor(B_PANEL_BACKGROUND_COLOR);
+	SetFont(be_plain_font);
 }
 
 void SongHeader::Draw(BRect)
 {
 	const float width = Bounds().Width();
+	const float baseline = Bounds().Height() - 8.0f;
 
 	SetHighColor(SecondaryText());
-	MovePenTo(BPoint(kCoverX, kHeaderHeight - 9.0f));
-	DrawString("标题");
+	MovePenTo(BPoint(CoverX(), baseline));
+	DrawString(B_TRANSLATE("标题"));
 
-	MovePenTo(BPoint(AlbumX(width), kHeaderHeight - 9.0f));
-	DrawString("专辑");
+	MovePenTo(BPoint(AlbumX(width), baseline));
+	DrawString(B_TRANSLATE("专辑"));
 
-	MovePenTo(BPoint(HeartX(width), kHeaderHeight - 9.0f));
-	DrawString("喜欢");
+	MovePenTo(BPoint(HeartX(width), baseline));
+	DrawString(B_TRANSLATE("喜欢"));
 
-	const char* duration = "时长";
-	MovePenTo(BPoint(DurationRight(width) - StringWidth(duration),
-		kHeaderHeight - 9.0f));
+	const char* duration = B_TRANSLATE("时长");
+	MovePenTo(BPoint(DurationRight(width) - StringWidth(duration), baseline));
 	DrawString(duration);
-
-	SetHighColor((rgb_color){ 232, 232, 232, 255 });
-	StrokeLine(BPoint(0, Bounds().bottom), BPoint(width, Bounds().bottom));
 }

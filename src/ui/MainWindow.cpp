@@ -1,19 +1,24 @@
 #include "MainWindow.h"
 
 #include "ListMetrics.h"
+#include "LoginWindow.h"
 #include "SongHeader.h"
 #include "SongItem.h"
 #include "audio/Player.h"
 
+#include <Alert.h>
+
+#include <Catalog.h>
 #include <Bitmap.h>
 #include <Button.h>
-#include <Font.h>
 #include <LayoutBuilder.h>
 #include <ListView.h>
 #include <Menu.h>
 #include <MenuBar.h>
 #include <MenuItem.h>
+#include <MessageRunner.h>
 #include <ScrollView.h>
+#include <Slider.h>
 #include <StringView.h>
 #include <TextControl.h>
 #include <TranslationUtils.h>
@@ -24,6 +29,9 @@
 #include <utility>
 
 using namespace ncm::metrics;
+
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "MainWindow"
 
 namespace {
 
@@ -71,109 +79,184 @@ std::string AudioPath(long long id, const std::string& type)
 		+ (type.empty() ? "mp3" : type);
 }
 
-BStringView* MakeSidebarEntry(const char* label, bool highlight = false)
+std::string SessionPath()
 {
-	auto* view = new BStringView("entry", label);
-	BFont font(be_plain_font);
-	font.SetSize(12.5f);
-	if (highlight)
-		font.SetFace(B_BOLD_FACE);
-	view->SetFont(&font);
-	view->SetHighColor(highlight ? Accent() : PrimaryText());
-	view->SetExplicitMinSize(BSize(B_SIZE_UNSET, 30.0f));
-	return view;
+	return SessionDir() + "/session.txt";
+}
+
+void SaveSession(const std::string& cookie, const std::string& nickname)
+{
+	FILE* file = fopen(SessionPath().c_str(), "w");
+	if (file == nullptr)
+		return;
+	fprintf(file, "%s\n%s\n", nickname.c_str(), cookie.c_str());
+	fclose(file);
+}
+
+void TrimLine(char* text)
+{
+	for (char* cursor = text; *cursor != '\0'; cursor++) {
+		if (*cursor == '\n' || *cursor == '\r') {
+			*cursor = '\0';
+			return;
+		}
+	}
+}
+
+bool LoadSession(std::string* cookie, std::string* nickname)
+{
+	FILE* file = fopen(SessionPath().c_str(), "r");
+	if (file == nullptr)
+		return false;
+
+	char nicknameBuffer[256] = { 0 };
+	char cookieBuffer[2048] = { 0 };
+	const bool ok = fgets(nicknameBuffer, sizeof(nicknameBuffer), file) != nullptr
+		&& fgets(cookieBuffer, sizeof(cookieBuffer), file) != nullptr;
+	fclose(file);
+	if (!ok)
+		return false;
+
+	TrimLine(nicknameBuffer);
+	TrimLine(cookieBuffer);
+
+	*nickname = nicknameBuffer;
+	*cookie = cookieBuffer;
+	return !cookie->empty();
+}
+
+std::string FormatTime(double seconds)
+{
+	if (seconds < 0.0)
+		seconds = 0.0;
+
+	const int total = static_cast<int>(seconds);
+	char buffer[16];
+	snprintf(buffer, sizeof(buffer), "%d:%02d", total / 60, total % 60);
+	return buffer;
 }
 
 } // namespace
 
 MainWindow::MainWindow()
-	: BWindow(BRect(80, 80, 900, 660), "HaikuNCM", B_TITLED_WINDOW,
+	: BWindow(BRect(80, 80, 880, 660), "HaikuNCM", B_TITLED_WINDOW,
 		  B_QUIT_ON_WINDOW_CLOSE)
 {
 	fApi = new ncm::NeteaseApi();
+	fPlayer = new ncm::Player();
 
 	fMenuBar = new BMenuBar("menubar");
-	BMenu* fileMenu = new BMenu("文件");
-	fileMenu->AddItem(new BMenuItem("退出", new BMessage(B_QUIT_REQUESTED), 'Q'));
-	fMenuBar->AddItem(fileMenu);
+	_BuildMenu();
 
-	fSidebar = new BView("sidebar", B_WILL_DRAW);
-	fSidebar->SetViewColor((rgb_color){ 251, 251, 251, 255 });
-	fSidebar->SetExplicitMinSize(BSize(168, B_SIZE_UNSET));
-	fSidebar->SetExplicitMaxSize(BSize(168, B_SIZE_UNLIMITED));
-	_BuildSidebar();
+	fLoginButton = new BButton("login-button", B_TRANSLATE("登录…"),
+		new BMessage(kMessageLogin));
 
-	fSearchField = new BTextControl("search", nullptr, "",
+	fSearchField = new BTextControl("search", B_TRANSLATE("搜索"), "",
 		new BMessage(kMessageSearch));
 	fSearchField->SetModificationMessage(nullptr);
-	fSearchField->SetExplicitMinSize(BSize(320, B_SIZE_UNSET));
-	fSearchButton = new BButton("search-button", "搜索",
+	fSearchField->SetExplicitMinSize(BSize(280, B_SIZE_UNSET));
+	fSearchButton = new BButton("search-button", B_TRANSLATE("搜索"),
 		new BMessage(kMessageSearch));
 
 	fHeader = new SongHeader();
 	fResults = new BListView("results", B_SINGLE_SELECTION_LIST);
-	fResults->SetViewColor(RowBackground());
+	fResults->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
 	fResults->SetSelectionMessage(new BMessage(kSelectionChanged));
 	fResults->SetInvocationMessage(new BMessage(kMessagePlay));
-	fResults->SetExplicitMinSize(BSize(560, 300));
+	fResults->SetExplicitMinSize(BSize(560, 260));
 
-	fNowPlaying = new BStringView("now-playing", "未播放");
-	fPlayButton = new BButton("play-button", "播放", new BMessage(kMessagePlay));
-	fStatus = new BStringView("status", "输入关键词开始搜索");
+	fPrevButton = new BButton("prev", B_TRANSLATE("上一首"), new BMessage(kMessagePrev));
+	fPlayButton = new BButton("play", B_TRANSLATE("播放"), new BMessage(kMessagePlay));
+	fNextButton = new BButton("next", B_TRANSLATE("下一首"), new BMessage(kMessageNext));
+
+	fSeek = new BSlider("seek", nullptr, new BMessage(kMessageSeek), 0, 1000,
+		B_HORIZONTAL);
+	fSeek->SetExplicitMinSize(BSize(160, B_SIZE_UNSET));
+	fSeek->SetEnabled(false);
+
+	fTimeLabel = new BStringView("time", "0:00 / 0:00");
+	fStatus = new BStringView("status", B_TRANSLATE("输入关键词开始搜索"));
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
-		.Add(fMenuBar)
 		.AddGroup(B_HORIZONTAL, 0)
-			.Add(fSidebar)
-			.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
-				.SetInsets(B_USE_WINDOW_INSETS)
-				.AddGroup(B_HORIZONTAL, 8.0f)
-					.Add(fSearchField)
-					.Add(fSearchButton)
-				.End()
-				.Add(fHeader)
-				.Add(new BScrollView("scroll", fResults, 0, false, true))
-				.AddGroup(B_HORIZONTAL, 8.0f)
-					.Add(fNowPlaying, 1.0f)
-					.Add(fPlayButton)
-				.End()
-				.Add(fStatus)
+			.Add(fMenuBar)
+			.Add(fLoginButton)
+			.SetInsets(0, 0, B_USE_SMALL_SPACING, 0)
+		.End()
+		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
+			.SetInsets(B_USE_WINDOW_INSETS)
+			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+				.Add(fSearchField)
+				.Add(fSearchButton)
 			.End()
+			.Add(fHeader)
+			.Add(new BScrollView("scroll", fResults, 0, false, true))
+			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+				.Add(fPrevButton)
+				.Add(fPlayButton)
+				.Add(fNextButton)
+				.Add(fSeek, 1.0f)
+				.Add(fTimeLabel)
+			.End()
+			.Add(fStatus)
 		.End();
 
-	SetSizeLimits(760, 4000, 420, 4000);
-	ResizeTo(820, 580);
+	SetSizeLimits(720, 4000, 400, 4000);
+	ResizeTo(800, 580);
 	CenterOnScreen();
+
+	fTicker = new BMessageRunner(BMessenger(this), new BMessage(kMessageTick),
+		500000);
+
+	std::string cookie;
+	std::string nickname;
+	if (LoadSession(&cookie, &nickname) && !cookie.empty()) {
+		fApi->SetCookie(cookie);
+		BString label("使用 ");
+		label << nickname.c_str() << " 登录";
+		fLoginButton->SetLabel(label.String());
+		fLoginButton->SetEnabled(false);
+		if (fLogoutItem != nullptr)
+			fLogoutItem->SetEnabled(true);
+	}
 }
 
 MainWindow::~MainWindow()
 {
+	delete fPlayer;
 	delete fApi;
 }
 
-void MainWindow::_BuildSidebar()
+void MainWindow::_BuildMenu()
 {
-	auto* title = new BStringView("brand", "HaikuNCM");
-	BFont titleFont(be_plain_font);
-	titleFont.SetSize(16.0f);
-	titleFont.SetFace(B_BOLD_FACE);
-	title->SetFont(&titleFont);
-	title->SetHighColor(Accent());
+	BMenu* fileMenu = new BMenu(B_TRANSLATE("文件"));
+	fileMenu->AddItem(new BMenuItem(B_TRANSLATE("搜索…"),
+		new BMessage(kMessageFocusSearch), 'F'));
+	fileMenu->AddSeparatorItem();
+	fileMenu->AddItem(new BMenuItem(B_TRANSLATE("退出"), new BMessage(B_QUIT_REQUESTED), 'Q'));
 
-	BLayoutBuilder::Group<>(fSidebar, B_VERTICAL, 2.0f)
-		.SetInsets(18.0f, 16.0f, 18.0f, 12.0f)
-		.Add(title)
-		.AddStrut(10.0f)
-		.Add(MakeSidebarEntry("推荐", true))
-		.Add(MakeSidebarEntry("精选"))
-		.Add(MakeSidebarEntry("播客"))
-		.Add(MakeSidebarEntry("漫游"))
-		.AddStrut(14.0f)
-		.Add(MakeSidebarEntry("我的音乐"))
-		.Add(MakeSidebarEntry("最近播放"))
-		.AddGlue()
-		.Add(MakeSidebarEntry("搜索"))
-		.End();
+	BMenu* musicMenu = new BMenu(B_TRANSLATE("音乐"));
+	BMenuItem* myMusic = new BMenuItem(B_TRANSLATE("我的音乐"), new BMessage(kMessageStatus));
+	myMusic->SetEnabled(false);
+	musicMenu->AddItem(myMusic);
+	BMenuItem* recent = new BMenuItem(B_TRANSLATE("最近播放"), new BMessage(kMessageStatus));
+	recent->SetEnabled(false);
+	musicMenu->AddItem(recent);
+
+	fAccountMenu = new BMenu(B_TRANSLATE("账号"));
+	fLoginItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
+	fLogoutItem = new BMenuItem(B_TRANSLATE("退出登录"), new BMessage(kMessageLogout));
+	fLogoutItem->SetEnabled(false);
+	fAccountMenu->AddItem(fLoginItem);
+	fAccountMenu->AddItem(fLogoutItem);
+
+	BMenu* helpMenu = new BMenu(B_TRANSLATE("帮助"));
+	helpMenu->AddItem(new BMenuItem(B_TRANSLATE("关于 HaikuNCM"), new BMessage(kMessageAbout)));
+
+	fMenuBar->AddItem(fileMenu);
+	fMenuBar->AddItem(musicMenu);
+	fMenuBar->AddItem(fAccountMenu);
+	fMenuBar->AddItem(helpMenu);
 }
 
 void MainWindow::SearchFor(const char* keyword)
@@ -190,6 +273,10 @@ void MainWindow::SearchFor(const char* keyword)
 void MainWindow::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
+		case kMessageFocusSearch:
+			fSearchField->MakeFocus(true);
+			return;
+
 		case kMessageSearch:
 		{
 			const char* keyword = nullptr;
@@ -209,16 +296,61 @@ void MainWindow::MessageReceived(BMessage* message)
 			return;
 
 		case kMessagePlay:
-			_StartPlay(fResults->CurrentSelection());
+			if (fBusy)
+				return;
+			if (fPlayer->IsLoaded()
+				&& fResults->CurrentSelection() == fCurrentIndex)
+				_TogglePlayback();
+			else
+				_StartPlay(fResults->CurrentSelection());
 			return;
+
+		case kMessagePrev:
+		{
+			int32 target = fCurrentIndex > 0 ? fCurrentIndex - 1
+											: fResults->CountItems() - 1;
+			if (target >= 0)
+				_StartPlay(target);
+			return;
+		}
+
+		case kMessageNext:
+		{
+			const int32 count = fResults->CountItems();
+			int32 target = 0;
+			if (fCurrentIndex >= 0 && fCurrentIndex + 1 < count)
+				target = fCurrentIndex + 1;
+			if (count > 0)
+				_StartPlay(target);
+			return;
+		}
 
 		case kMessagePlayDone:
 		{
 			const char* text = nullptr;
 			if (message->FindString("text", &text) == B_OK)
 				fStatus->SetText(text);
+
+			const char* path = nullptr;
+			if (message->FindString("path", &path) == B_OK) {
+				fCurrentIndex = fResults->CurrentSelection();
+
+				std::string error;
+				if (!fPlayer->Load(path, &error)) {
+					fStatus->SetText(Prefixed(B_TRANSLATE("解码失败: "), error));
+				} else {
+					fSeek->SetEnabled(true);
+					if (fPlayer->Play(&error)) {
+						fPlayButton->SetLabel(B_TRANSLATE("暂停"));
+					} else {
+						fPlayButton->SetLabel(B_TRANSLATE("播放"));
+						fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
+					}
+					_UpdateTransport();
+				}
+			}
 			fBusy = false;
-			break;
+			return;
 		}
 
 		case kMessageStatus:
@@ -229,9 +361,72 @@ void MainWindow::MessageReceived(BMessage* message)
 			return;
 		}
 
-		case kSelectionChanged:
-			_UpdateSelectionLabel();
-			break;
+		case kMessageSeek:
+		{
+			if (!fPlayer->IsLoaded())
+				return;
+
+			const double target = fSeek->Value() / 1000.0
+				* fPlayer->DurationSeconds();
+			std::string error;
+			if (!fPlayer->Seek(target, &error))
+				fStatus->SetText(Prefixed(B_TRANSLATE("定位失败: "), error));
+			_UpdateTransport();
+			return;
+		}
+
+		case kMessageTick:
+			if (fPlayer->IsPlaying())
+				_UpdateTransport();
+			return;
+
+		case kMessageLogin:
+			(new LoginWindow(BMessenger(this)))->Show();
+			return;
+
+		case kMessageLoginDone:
+		{
+			const char* nickname = nullptr;
+			const char* cookie = nullptr;
+			if (message->FindString("nickname", &nickname) == B_OK
+				&& message->FindString("cookie", &cookie) == B_OK) {
+				fApi->SetCookie(cookie);
+				SaveSession(cookie, nickname);
+
+				BString label("使用 ");
+				label << nickname << " 登录";
+				fLoginButton->SetLabel(label.String());
+				fLoginButton->SetEnabled(false);
+				if (fLogoutItem != nullptr)
+					fLogoutItem->SetEnabled(true);
+
+				BString status("已登录: ");
+				status << nickname;
+				fStatus->SetText(status.String());
+			}
+			return;
+		}
+
+		case kMessageLogout:
+			fApi->SetCookie(std::string());
+			remove(SessionPath().c_str());
+			fLoginButton->SetLabel(B_TRANSLATE("登录…"));
+			fLoginButton->SetEnabled(true);
+			if (fLogoutItem != nullptr)
+				fLogoutItem->SetEnabled(false);
+			fStatus->SetText(B_TRANSLATE("已退出登录"));
+			return;
+
+		case kMessageAbout:
+		{
+			BAlert* alert = new BAlert("关于 HaikuNCM",
+				"HaikuNCM 1.0\n\nHaiku 原生第三方网易云音乐客户端。\n"
+				"界面与播放全部使用 Haiku 的 Interface Kit / Media Kit。\n\n"
+				"协议参考 NeteaseCloudMusicApi，代码为独立实现。",
+				"好");
+			alert->Go();
+			return;
+		}
 
 		default:
 			BWindow::MessageReceived(message);
@@ -252,20 +447,20 @@ void MainWindow::_StartSearch()
 
 	const char* text = fSearchField->Text();
 	if (text == nullptr || text[0] == '\0') {
-		fStatus->SetText("先输入要搜的歌名");
+		fStatus->SetText(B_TRANSLATE("先输入要搜的歌名"));
 		return;
 	}
 
 	fKeyword = text;
 	fBusy = true;
-	fStatus->SetText("搜索中…");
+	fStatus->SetText(B_TRANSLATE("搜索中…"));
 	fSearchButton->SetEnabled(false);
 
 	thread_id thread = spawn_thread(_SearchThread, "ncm-search",
 		B_NORMAL_PRIORITY, this);
 	if (thread < B_OK) {
 		fBusy = false;
-		fStatus->SetText("无法创建搜索线程");
+		fStatus->SetText(B_TRANSLATE("无法创建搜索线程"));
 		return;
 	}
 	resume_thread(thread);
@@ -289,8 +484,8 @@ int32 MainWindow::_SearchThread(void* data)
 		BMessage done(kMessageSearchDone);
 		self->_PostIfAlive(&done);
 	} else {
-		BMessage failure(kMessagePlayDone);
-		failure.AddString("text", Prefixed("搜索失败: ", error));
+		BMessage failure(kMessageStatus);
+		failure.AddString("text", Prefixed(B_TRANSLATE("搜索失败: "), error));
 		self->_PostIfAlive(&failure);
 	}
 	return 0;
@@ -298,7 +493,13 @@ int32 MainWindow::_SearchThread(void* data)
 
 void MainWindow::_FillResults()
 {
+	fPlayer->Stop();
 	fResults->MakeEmpty();
+	fCurrentIndex = -1;
+	fPlayButton->SetLabel(B_TRANSLATE("播放"));
+	fSeek->SetValue(0);
+	fSeek->SetEnabled(false);
+	fTimeLabel->SetText("0:00 / 0:00");
 
 	fLock.Lock();
 	const size_t count = fSongs.size();
@@ -370,20 +571,8 @@ void MainWindow::_ApplyCovers()
 
 void MainWindow::_UpdateSelectionLabel()
 {
-	const int32 index = fResults->CurrentSelection();
-	if (index < 0) {
-		fNowPlaying->SetText("未播放");
-		return;
-	}
-
-	fLock.Lock();
-	if (static_cast<size_t>(index) < fSongs.size()) {
-		const ncm::Song& song = fSongs[index];
-		BString text;
-		text << song.name.c_str() << "  ·  " << song.artist.c_str();
-		fNowPlaying->SetText(text.String());
-	}
-	fLock.Unlock();
+	// 列表选择变化时只需重绘；播放条由播放动作驱动
+	fResults->Invalidate();
 }
 
 void MainWindow::_StartPlay(int32 index)
@@ -396,12 +585,12 @@ void MainWindow::_StartPlay(int32 index)
 	fLock.Unlock();
 
 	if (!valid) {
-		fStatus->SetText("先在列表里选一首歌");
+		fStatus->SetText(B_TRANSLATE("先在列表里选一首歌"));
 		return;
 	}
 
 	fBusy = true;
-	fStatus->SetText("正在获取播放地址…");
+	fStatus->SetText(B_TRANSLATE("正在获取播放地址…"));
 
 	auto* payload = new std::pair<MainWindow*, int32>(this, index);
 	thread_id thread = spawn_thread(_PlayThread, "ncm-play", B_NORMAL_PRIORITY,
@@ -409,7 +598,7 @@ void MainWindow::_StartPlay(int32 index)
 	if (thread < B_OK) {
 		delete payload;
 		fBusy = false;
-		fStatus->SetText("无法创建播放线程");
+		fStatus->SetText(B_TRANSLATE("无法创建播放线程"));
 		return;
 	}
 	resume_thread(thread);
@@ -431,7 +620,7 @@ int32 MainWindow::_PlayThread(void* data)
 	ncm::AudioUrl audio;
 	std::string error;
 	if (!self->fApi->SongUrl(song.id, "standard", &audio, &error)) {
-		result.AddString("text", Prefixed("取流失败: ", error));
+		result.AddString("text", Prefixed(B_TRANSLATE("取流失败: "), error));
 		self->_PostIfAlive(&result);
 		return 0;
 	}
@@ -442,37 +631,55 @@ int32 MainWindow::_PlayThread(void* data)
 		&& info.st_size == audio.size;
 	if (!cached) {
 		if (!self->fApi->DownloadAudio(audio, path, &error)) {
-			result.AddString("text", Prefixed("下载失败: ", error));
+			result.AddString("text", Prefixed(B_TRANSLATE("下载失败: "), error));
 			self->_PostIfAlive(&result);
 			return 0;
 		}
 	}
 
-	ncm::Player player;
-	if (!player.Load(path, &error)) {
-		result.AddString("text", Prefixed("解码失败: ", error));
-		self->_PostIfAlive(&result);
-		return 0;
-	}
-
-	const std::string description = player.Description();
-	if (!player.Play(&error)) {
-		BString text;
-		text << song.name.c_str() << " 已就绪（" << description.c_str()
-			 << "），但" << error.c_str();
-		result.AddString("text", text.String());
-		self->_PostIfAlive(&result);
-		return 0;
-	}
-
-	BString text;
-	text << "正在播放: " << song.name.c_str() << "（" << description.c_str()
-		 << "）";
-	result.AddString("text", text.String());
+	result.AddString("path", path.c_str());
 	self->_PostIfAlive(&result);
-
-	snooze(static_cast<bigtime_t>(300 * 1000 * 1000));
 	return 0;
+}
+
+void MainWindow::_TogglePlayback()
+{
+	if (!fPlayer->IsLoaded())
+		return;
+
+	std::string error;
+	if (fPlayer->IsPlaying()) {
+		fPlayer->Stop();
+		fPlayButton->SetLabel(B_TRANSLATE("播放"));
+		return;
+	}
+
+	if (fPlayer->Play(&error))
+		fPlayButton->SetLabel(B_TRANSLATE("暂停"));
+	else
+		fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
+}
+
+void MainWindow::_UpdateTransport()
+{
+	if (!fPlayer->IsLoaded()) {
+		fTimeLabel->SetText("0:00 / 0:00");
+		return;
+	}
+
+	const double duration = fPlayer->DurationSeconds();
+	const double position = fPlayer->PositionSeconds();
+
+	if (!fSeeking) {
+		const int32 value = duration > 0.0
+			? static_cast<int32>(position / duration * 1000.0)
+			: 0;
+		fSeek->SetValue(value);
+	}
+
+	BString label(FormatTime(position).c_str());
+	label << " / " << FormatTime(duration).c_str();
+	fTimeLabel->SetText(label.String());
 }
 
 void MainWindow::_PostIfAlive(BMessage* message)

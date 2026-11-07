@@ -11,11 +11,18 @@
 
 class BButton;
 class BListView;
+class BMenu;
+class BMenuItem;
 class BMenuBar;
+class BMessageRunner;
+class BSlider;
 class BStringView;
 class BTextControl;
-class BView;
 class SongHeader;
+
+namespace ncm {
+class Player;
+}
 
 enum {
 	kMessageSearch = 'srch',
@@ -24,6 +31,14 @@ enum {
 	kMessagePlay = 'play',
 	kMessagePlayDone = 'pldn',
 	kMessageStatus = 'stat',
+	kMessageFocusSearch = 'fsrc',
+	kMessageLogin = 'logn',
+	kMessageLogout = 'lout',
+	kMessageAbout = 'abot',
+	kMessageSeek = 'seek',
+	kMessagePrev = 'prev',
+	kMessageNext = 'next',
+	kMessageTick = 'tick',
 };
 
 class MainWindow : public BWindow {
@@ -37,28 +52,43 @@ public:
 	bool QuitRequested() override;
 
 private:
-	void _BuildSidebar();
+	void _BuildMenu();
 	void _StartSearch();
 	void _StartPlay(int32 index);
 	void _FillResults();
 	void _ApplyCovers();
 	void _UpdateSelectionLabel();
+	void _UpdateTransport();
 	void _PostIfAlive(BMessage* message);
 	void _StartCoverDownload();
+	void _TogglePlayback();
 
 	static int32 _SearchThread(void* data);
 	static int32 _PlayThread(void* data);
 	static int32 _CoverThread(void* data);
 
 	BMenuBar* fMenuBar = nullptr;
-	BView* fSidebar = nullptr;
+	BMenu* fAccountMenu = nullptr;
+	BMenuItem* fLoginItem = nullptr;
+	BMenuItem* fLogoutItem = nullptr;
+	BButton* fLoginButton = nullptr;
+
 	BTextControl* fSearchField = nullptr;
 	BButton* fSearchButton = nullptr;
 	SongHeader* fHeader = nullptr;
 	BListView* fResults = nullptr;
-	BStringView* fNowPlaying = nullptr;
+
+	BButton* fPrevButton = nullptr;
 	BButton* fPlayButton = nullptr;
+	BButton* fNextButton = nullptr;
+	BSlider* fSeek = nullptr;
+	BStringView* fTimeLabel = nullptr;
 	BStringView* fStatus = nullptr;
+
+	ncm::Player* fPlayer = nullptr;
+	BMessageRunner* fTicker = nullptr;
+	int32 fCurrentIndex = -1;
+	bool fSeeking = false;
 
 	BLocker fLock;
 	std::vector<ncm::Song> fSongs;

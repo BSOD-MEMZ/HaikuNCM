@@ -19,7 +19,12 @@ public:
 	void Stop();
 
 	bool IsLoaded() const;
+	bool IsPlaying() const;
 	std::string Description() const;
+
+	double DurationSeconds() const;
+	double PositionSeconds() const;
+	bool Seek(double seconds, std::string* error);
 
 private:
 	struct Impl;

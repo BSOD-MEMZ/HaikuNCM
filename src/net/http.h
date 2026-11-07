@@ -9,6 +9,7 @@ namespace ncm {
 struct Response {
 	long status = 0;
 	std::string body;
+	std::string headers;
 	std::string error;
 
 	bool Ok() const

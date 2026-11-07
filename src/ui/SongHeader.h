@@ -3,20 +3,13 @@
 
 #include <View.h>
 
-class BFont;
-
-// Column titles drawn above the song table. Kept in a plain BView so the
-// metrics stay in sync with SongItem.
+// 表头：标题 / 专辑 / 喜欢 / 时长，列坐标与 SongItem 共用 ListMetrics。
 class SongHeader : public BView {
 public:
 	SongHeader();
-	~SongHeader() override;
 
 	void Draw(BRect updateRect) override;
 	void AttachedToWindow() override;
-
-private:
-	BFont* fFont = nullptr;
 };
 
 #endif
