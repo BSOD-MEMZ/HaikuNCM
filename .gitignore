@@ -1,0 +1,13 @@
+# 构建产物
+build/
+*.o
+*.d
+HaikuNCM
+ncmcli
+
+# 探针下载的样本
+probe_sample.*
+*.mp3
+
+# 工具与记忆
+.workbuddy/
