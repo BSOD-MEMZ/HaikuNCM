@@ -4,6 +4,7 @@
 #include "LoginWindow.h"
 #include "SongHeader.h"
 #include "SongItem.h"
+#include "TransportButton.h"
 #include "audio/Player.h"
 
 #include <Alert.h>
@@ -165,9 +166,12 @@ MainWindow::MainWindow()
 	fResults->SetInvocationMessage(new BMessage(kMessagePlay));
 	fResults->SetExplicitMinSize(BSize(560, 260));
 
-	fPrevButton = new BButton("prev", B_TRANSLATE("上一首"), new BMessage(kMessagePrev));
-	fPlayButton = new BButton("play", B_TRANSLATE("播放"), new BMessage(kMessagePlay));
-	fNextButton = new BButton("next", B_TRANSLATE("下一首"), new BMessage(kMessageNext));
+	fPrevButton = new TransportButton("prev", TransportButton::kPrevious,
+		B_TRANSLATE("上一首"), new BMessage(kMessagePrev));
+	fPlayButton = new TransportButton("play", TransportButton::kPlay,
+		B_TRANSLATE("播放"), new BMessage(kMessagePlay));
+	fNextButton = new TransportButton("next", TransportButton::kNext,
+		B_TRANSLATE("下一首"), new BMessage(kMessageNext));
 
 	fSeek = new BSlider("seek", nullptr, new BMessage(kMessageSeek), 0, 1000,
 		B_HORIZONTAL);
@@ -341,9 +345,9 @@ void MainWindow::MessageReceived(BMessage* message)
 				} else {
 					fSeek->SetEnabled(true);
 					if (fPlayer->Play(&error)) {
-						fPlayButton->SetLabel(B_TRANSLATE("暂停"));
+						fPlayButton->SetKind(TransportButton::kPause);
 					} else {
-						fPlayButton->SetLabel(B_TRANSLATE("播放"));
+						fPlayButton->SetKind(TransportButton::kPlay);
 						fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
 					}
 					_UpdateTransport();
@@ -496,7 +500,7 @@ void MainWindow::_FillResults()
 	fPlayer->Stop();
 	fResults->MakeEmpty();
 	fCurrentIndex = -1;
-	fPlayButton->SetLabel(B_TRANSLATE("播放"));
+	fPlayButton->SetKind(TransportButton::kPlay);
 	fSeek->SetValue(0);
 	fSeek->SetEnabled(false);
 	fTimeLabel->SetText("0:00 / 0:00");
@@ -650,12 +654,12 @@ void MainWindow::_TogglePlayback()
 	std::string error;
 	if (fPlayer->IsPlaying()) {
 		fPlayer->Stop();
-		fPlayButton->SetLabel(B_TRANSLATE("播放"));
+		fPlayButton->SetKind(TransportButton::kPlay);
 		return;
 	}
 
 	if (fPlayer->Play(&error))
-		fPlayButton->SetLabel(B_TRANSLATE("暂停"));
+		fPlayButton->SetKind(TransportButton::kPause);
 	else
 		fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
 }

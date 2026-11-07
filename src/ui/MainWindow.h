@@ -19,6 +19,7 @@ class BSlider;
 class BStringView;
 class BTextControl;
 class SongHeader;
+class TransportButton;
 
 namespace ncm {
 class Player;
@@ -78,9 +79,9 @@ private:
 	SongHeader* fHeader = nullptr;
 	BListView* fResults = nullptr;
 
-	BButton* fPrevButton = nullptr;
-	BButton* fPlayButton = nullptr;
-	BButton* fNextButton = nullptr;
+	TransportButton* fPrevButton = nullptr;
+	TransportButton* fPlayButton = nullptr;
+	TransportButton* fNextButton = nullptr;
 	BSlider* fSeek = nullptr;
 	BStringView* fTimeLabel = nullptr;
 	BStringView* fStatus = nullptr;

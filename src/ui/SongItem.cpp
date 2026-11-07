@@ -67,6 +67,8 @@ void SongItem::Update(BView* owner, const BFont* font)
 
 void SongItem::DrawItem(BView* owner, BRect frame, bool complete)
 {
+	(void)complete; // 每行都整体重绘，用不到增量标志
+
 	const float width = owner->Bounds().Width();
 	const bool selected = IsSelected();
 
@@ -81,7 +83,7 @@ void SongItem::DrawItem(BView* owner, BRect frame, bool complete)
 
 	owner->SetFont(be_plain_font);
 	owner->SetHighColor(secondary);
-	char indexText[8];
+	char indexText[16];
 	snprintf(indexText, sizeof(indexText), "%02d", static_cast<int>(fIndex + 1));
 	owner->MovePenTo(
 		BPoint(IndexRight() - owner->StringWidth(indexText), middle + 4.0f));
@@ -129,7 +131,7 @@ void SongItem::DrawItem(BView* owner, BRect frame, bool complete)
 	owner->DrawString("\xe2\x99\xa5");
 
 	const long long seconds = fSong.durationMs / 1000;
-	char duration[16];
+	char duration[32];
 	snprintf(duration, sizeof(duration), "%lld:%02lld", seconds / 60,
 		seconds % 60);
 	owner->MovePenTo(
