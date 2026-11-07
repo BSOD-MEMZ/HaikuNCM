@@ -14,10 +14,13 @@ class BListView;
 class BMenuBar;
 class BStringView;
 class BTextControl;
+class BView;
+class SongHeader;
 
 enum {
 	kMessageSearch = 'srch',
 	kMessageSearchDone = 'sdon',
+	kMessageCoversDone = 'cver',
 	kMessagePlay = 'play',
 	kMessagePlayDone = 'pldn',
 	kMessageStatus = 'stat',
@@ -34,19 +37,24 @@ public:
 	bool QuitRequested() override;
 
 private:
+	void _BuildSidebar();
 	void _StartSearch();
 	void _StartPlay(int32 index);
 	void _FillResults();
+	void _ApplyCovers();
 	void _UpdateSelectionLabel();
-	void _PostStatus(const BString& text);
 	void _PostIfAlive(BMessage* message);
+	void _StartCoverDownload();
 
 	static int32 _SearchThread(void* data);
 	static int32 _PlayThread(void* data);
+	static int32 _CoverThread(void* data);
 
 	BMenuBar* fMenuBar = nullptr;
+	BView* fSidebar = nullptr;
 	BTextControl* fSearchField = nullptr;
 	BButton* fSearchButton = nullptr;
+	SongHeader* fHeader = nullptr;
 	BListView* fResults = nullptr;
 	BStringView* fNowPlaying = nullptr;
 	BButton* fPlayButton = nullptr;

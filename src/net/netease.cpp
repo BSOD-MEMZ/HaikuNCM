@@ -5,6 +5,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <map>
+
 namespace ncm {
 
 namespace {
@@ -36,6 +38,52 @@ const std::vector<std::string>& DownloadHeaders()
 		"Cookie: os=pc; appver=8.9.70; channel=netease",
 	};
 	return headers;
+}
+
+// search/get 的专辑对象没有 picUrl，用一次 song/detail 批量补齐
+void FetchCovers(std::vector<Song>* songs)
+{
+	if (songs->empty())
+		return;
+
+	json ids = json::array();
+	for (const Song& song : *songs)
+		ids.push_back({ { "id", song.id } });
+
+	const json payload = { { "c", ids.dump() } };
+	const WeapiForm form = Weapi(payload.dump());
+	const std::string body = "params=" + UrlEncode(form.params)
+		+ "&encSecKey=" + UrlEncode(form.encSecKey);
+
+	const Response response = PostForm("https://music.163.com/weapi/v3/song/detail",
+		body, ApiHeaders());
+	if (!response.Ok())
+		return;
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception&) {
+		return;
+	}
+
+	if (!document.contains("songs") || !document["songs"].is_array())
+		return;
+
+	std::map<long long, std::string> covers;
+	for (const json& item : document["songs"]) {
+		if (!item.contains("al") || !item["al"].is_object())
+			continue;
+		const std::string url = item["al"].value("picUrl", "");
+		if (!url.empty())
+			covers[item.value("id", 0LL)] = url + "?param=120y120";
+	}
+
+	for (Song& song : *songs) {
+		auto found = covers.find(song.id);
+		if (found != covers.end())
+			song.coverUrl = found->second;
+	}
 }
 
 std::string PickString(const json& object, const char* first, const char* second)
@@ -106,11 +154,15 @@ bool NeteaseApi::Search(const std::string& keyword, int limit,
 		}
 
 		const char* albumKey = item.contains("al") ? "al" : "album";
-		if (item.contains(albumKey) && item[albumKey].is_object())
+		if (item.contains(albumKey) && item[albumKey].is_object()) {
 			song.album = item[albumKey].value("name", "");
+			song.coverUrl = item[albumKey].value("picUrl", "");
+		}
 
 		songs->push_back(song);
 	}
+
+	FetchCovers(songs);
 	return true;
 }
 
@@ -169,6 +221,17 @@ bool NeteaseApi::DownloadAudio(const AudioUrl& audio, const std::string& path,
 	std::string* error)
 {
 	return DownloadToFile(audio.url, path, DownloadHeaders(), error);
+}
+
+bool NeteaseApi::DownloadCover(const std::string& url, const std::string& path,
+	std::string* error)
+{
+	if (url.empty()) {
+		if (error != nullptr)
+			*error = "封面地址为空";
+		return false;
+	}
+	return DownloadToFile(url, path, DownloadHeaders(), error);
 }
 
 } // namespace ncm

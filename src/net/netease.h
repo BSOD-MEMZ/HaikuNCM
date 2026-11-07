@@ -11,6 +11,7 @@ struct Song {
 	std::string name;
 	std::string artist;
 	std::string album;
+	std::string coverUrl;
 	long long durationMs = 0;
 	int fee = -1; // 0: free, 1: VIP (30s trial when anonymous), 8: free low quality
 };
@@ -33,6 +34,9 @@ public:
 		std::string* error);
 
 	bool DownloadAudio(const AudioUrl& audio, const std::string& path,
+		std::string* error);
+
+	bool DownloadCover(const std::string& url, const std::string& path,
 		std::string* error);
 };
 

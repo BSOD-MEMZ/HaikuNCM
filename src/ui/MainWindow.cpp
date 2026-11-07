@@ -1,21 +1,29 @@
 #include "MainWindow.h"
 
+#include "ListMetrics.h"
+#include "SongHeader.h"
+#include "SongItem.h"
 #include "audio/Player.h"
 
+#include <Bitmap.h>
 #include <Button.h>
+#include <Font.h>
 #include <LayoutBuilder.h>
 #include <ListView.h>
 #include <Menu.h>
 #include <MenuBar.h>
 #include <MenuItem.h>
-#include <StringItem.h>
+#include <ScrollView.h>
 #include <StringView.h>
 #include <TextControl.h>
+#include <TranslationUtils.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <sys/stat.h>
 #include <utility>
+
+using namespace ncm::metrics;
 
 namespace {
 
@@ -28,34 +36,58 @@ BString Prefixed(const char* prefix, const std::string& detail)
 	return text;
 }
 
-std::string FormatDuration(long long milliseconds)
+std::string EnsureDir(const std::string& path)
 {
-	const long long seconds = milliseconds / 1000;
-	char buffer[32];
-	snprintf(buffer, sizeof(buffer), "%lld:%02lld", seconds / 60,
-		seconds % 60);
-	return buffer;
+	mkdir(path.c_str(), 0755);
+	return path;
 }
 
-std::string CachePath(long long id, const std::string& type)
+std::string SessionDir()
 {
 	const char* home = getenv("HOME");
 	if (home == nullptr)
 		home = "/boot/home";
+	return EnsureDir(std::string(home) + "/HaikuNCM");
+}
 
-	const std::string base = std::string(home) + "/HaikuNCM";
-	const std::string cache = base + "/cache";
-	mkdir(base.c_str(), 0755);
-	mkdir(cache.c_str(), 0755);
+std::string CacheDir()
+{
+	return EnsureDir(SessionDir() + "/cache");
+}
 
-	return cache + "/" + std::to_string(id) + "."
+std::string CoverDir()
+{
+	return EnsureDir(CacheDir() + "/covers");
+}
+
+std::string CoverPath(long long id)
+{
+	return CoverDir() + "/" + std::to_string(id) + ".jpg";
+}
+
+std::string AudioPath(long long id, const std::string& type)
+{
+	return CacheDir() + "/" + std::to_string(id) + "."
 		+ (type.empty() ? "mp3" : type);
+}
+
+BStringView* MakeSidebarEntry(const char* label, bool highlight = false)
+{
+	auto* view = new BStringView("entry", label);
+	BFont font(be_plain_font);
+	font.SetSize(12.5f);
+	if (highlight)
+		font.SetFace(B_BOLD_FACE);
+	view->SetFont(&font);
+	view->SetHighColor(highlight ? Accent() : PrimaryText());
+	view->SetExplicitMinSize(BSize(B_SIZE_UNSET, 30.0f));
+	return view;
 }
 
 } // namespace
 
 MainWindow::MainWindow()
-	: BWindow(BRect(80, 80, 820, 600), "HaikuNCM", B_TITLED_WINDOW,
+	: BWindow(BRect(80, 80, 900, 660), "HaikuNCM", B_TITLED_WINDOW,
 		  B_QUIT_ON_WINDOW_CLOSE)
 {
 	fApi = new ncm::NeteaseApi();
@@ -65,46 +97,83 @@ MainWindow::MainWindow()
 	fileMenu->AddItem(new BMenuItem("退出", new BMessage(B_QUIT_REQUESTED), 'Q'));
 	fMenuBar->AddItem(fileMenu);
 
+	fSidebar = new BView("sidebar", B_WILL_DRAW);
+	fSidebar->SetViewColor((rgb_color){ 251, 251, 251, 255 });
+	fSidebar->SetExplicitMinSize(BSize(168, B_SIZE_UNSET));
+	fSidebar->SetExplicitMaxSize(BSize(168, B_SIZE_UNLIMITED));
+	_BuildSidebar();
+
 	fSearchField = new BTextControl("search", nullptr, "",
 		new BMessage(kMessageSearch));
 	fSearchField->SetModificationMessage(nullptr);
+	fSearchField->SetExplicitMinSize(BSize(320, B_SIZE_UNSET));
 	fSearchButton = new BButton("search-button", "搜索",
 		new BMessage(kMessageSearch));
 
-	fResults = new BListView("results");
-	fResults->SetExplicitMinSize(BSize(540, 280));
+	fHeader = new SongHeader();
+	fResults = new BListView("results", B_SINGLE_SELECTION_LIST);
+	fResults->SetViewColor(RowBackground());
 	fResults->SetSelectionMessage(new BMessage(kSelectionChanged));
 	fResults->SetInvocationMessage(new BMessage(kMessagePlay));
+	fResults->SetExplicitMinSize(BSize(560, 300));
 
 	fNowPlaying = new BStringView("now-playing", "未播放");
 	fPlayButton = new BButton("play-button", "播放", new BMessage(kMessagePlay));
-
 	fStatus = new BStringView("status", "输入关键词开始搜索");
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 		.Add(fMenuBar)
-		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
-			.SetInsets(B_USE_WINDOW_INSETS)
-			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
-				.Add(fSearchField)
-				.Add(fSearchButton)
+		.AddGroup(B_HORIZONTAL, 0)
+			.Add(fSidebar)
+			.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
+				.SetInsets(B_USE_WINDOW_INSETS)
+				.AddGroup(B_HORIZONTAL, 8.0f)
+					.Add(fSearchField)
+					.Add(fSearchButton)
+				.End()
+				.Add(fHeader)
+				.Add(new BScrollView("scroll", fResults, 0, false, true))
+				.AddGroup(B_HORIZONTAL, 8.0f)
+					.Add(fNowPlaying, 1.0f)
+					.Add(fPlayButton)
+				.End()
+				.Add(fStatus)
 			.End()
-			.Add(fResults)
-			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
-				.Add(fNowPlaying, 1.0f)
-				.Add(fPlayButton)
-			.End()
-			.Add(fStatus)
 		.End();
 
-	SetSizeLimits(520, 4000, 320, 4000);
-	ResizeTo(760, 540);
+	SetSizeLimits(760, 4000, 420, 4000);
+	ResizeTo(820, 580);
 	CenterOnScreen();
 }
 
 MainWindow::~MainWindow()
 {
 	delete fApi;
+}
+
+void MainWindow::_BuildSidebar()
+{
+	auto* title = new BStringView("brand", "HaikuNCM");
+	BFont titleFont(be_plain_font);
+	titleFont.SetSize(16.0f);
+	titleFont.SetFace(B_BOLD_FACE);
+	title->SetFont(&titleFont);
+	title->SetHighColor(Accent());
+
+	BLayoutBuilder::Group<>(fSidebar, B_VERTICAL, 2.0f)
+		.SetInsets(18.0f, 16.0f, 18.0f, 12.0f)
+		.Add(title)
+		.AddStrut(10.0f)
+		.Add(MakeSidebarEntry("推荐", true))
+		.Add(MakeSidebarEntry("精选"))
+		.Add(MakeSidebarEntry("播客"))
+		.Add(MakeSidebarEntry("漫游"))
+		.AddStrut(14.0f)
+		.Add(MakeSidebarEntry("我的音乐"))
+		.Add(MakeSidebarEntry("最近播放"))
+		.AddGlue()
+		.Add(MakeSidebarEntry("搜索"))
+		.End();
 }
 
 void MainWindow::SearchFor(const char* keyword)
@@ -133,6 +202,10 @@ void MainWindow::MessageReceived(BMessage* message)
 
 		case kMessageSearchDone:
 			_FillResults();
+			return;
+
+		case kMessageCoversDone:
+			_ApplyCovers();
 			return;
 
 		case kMessagePlay:
@@ -216,13 +289,9 @@ int32 MainWindow::_SearchThread(void* data)
 		BMessage done(kMessageSearchDone);
 		self->_PostIfAlive(&done);
 	} else {
-		BMessage status(kMessageStatus);
-		status.AddString("text", Prefixed("搜索失败: ", error));
-		self->_PostIfAlive(&status);
-
-		BMessage reset(kMessagePlayDone);
-		reset.AddString("text", Prefixed("搜索失败: ", error));
-		self->_PostIfAlive(&reset);
+		BMessage failure(kMessagePlayDone);
+		failure.AddString("text", Prefixed("搜索失败: ", error));
+		self->_PostIfAlive(&failure);
 	}
 	return 0;
 }
@@ -233,21 +302,70 @@ void MainWindow::_FillResults()
 
 	fLock.Lock();
 	const size_t count = fSongs.size();
-	for (size_t i = 0; i < count; i++) {
-		const ncm::Song& song = fSongs[i];
-		BString label;
-		label << song.name.c_str() << "  ·  " << song.artist.c_str()
-			  << "  ·  " << FormatDuration(song.durationMs).c_str();
-		fResults->AddItem(new BStringItem(label.String()));
-	}
+	for (size_t i = 0; i < count; i++)
+		fResults->AddItem(new SongItem(fSongs[i], static_cast<int32>(i)));
 	fLock.Unlock();
 
 	fBusy = false;
 	fSearchButton->SetEnabled(true);
 
 	BString status;
-	status << "找到 " << count << " 首（双击试听）";
+	status << "找到 " << count << " 首（双击播放）";
 	fStatus->SetText(status.String());
+
+	_StartCoverDownload();
+}
+
+void MainWindow::_StartCoverDownload()
+{
+	thread_id thread = spawn_thread(_CoverThread, "ncm-covers", B_LOW_PRIORITY,
+		this);
+	if (thread >= B_OK)
+		resume_thread(thread);
+}
+
+int32 MainWindow::_CoverThread(void* data)
+{
+	auto* self = static_cast<MainWindow*>(data);
+
+	std::vector<ncm::Song> songs;
+	self->fLock.Lock();
+	songs = self->fSongs;
+	self->fLock.Unlock();
+
+	for (const ncm::Song& song : songs) {
+		if (song.coverUrl.empty())
+			continue;
+
+		const std::string path = CoverPath(song.id);
+		struct stat info;
+		if (stat(path.c_str(), &info) == 0 && info.st_size > 1024)
+			continue;
+
+		std::string error;
+		self->fApi->DownloadCover(song.coverUrl, path, &error);
+	}
+
+	BMessage done(kMessageCoversDone);
+	self->_PostIfAlive(&done);
+	return 0;
+}
+
+void MainWindow::_ApplyCovers()
+{
+	const int32 count = fResults->CountItems();
+	for (int32 i = 0; i < count; i++) {
+		auto* item = dynamic_cast<SongItem*>(fResults->ItemAt(i));
+		if (item == nullptr)
+			continue;
+
+		const std::string path = CoverPath(item->Song().id);
+		BBitmap* bitmap = BTranslationUtils::GetBitmapFile(path.c_str());
+		if (bitmap != nullptr)
+			item->SetCover(bitmap);
+	}
+
+	fResults->Invalidate();
 }
 
 void MainWindow::_UpdateSelectionLabel()
@@ -318,7 +436,7 @@ int32 MainWindow::_PlayThread(void* data)
 		return 0;
 	}
 
-	const std::string path = CachePath(song.id, audio.type);
+	const std::string path = AudioPath(song.id, audio.type);
 	struct stat info;
 	const bool cached = stat(path.c_str(), &info) == 0
 		&& info.st_size == audio.size;
@@ -353,7 +471,6 @@ int32 MainWindow::_PlayThread(void* data)
 	result.AddString("text", text.String());
 	self->_PostIfAlive(&result);
 
-	// keep the player alive while the sound is playing
 	snooze(static_cast<bigtime_t>(300 * 1000 * 1000));
 	return 0;
 }
