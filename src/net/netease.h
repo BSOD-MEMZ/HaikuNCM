@@ -29,6 +29,17 @@ public:
 	bool Login(const std::string& phone, const std::string& password,
 		std::string* nickname, std::string* cookie, std::string* error);
 	bool LikeSong(long long id, bool like, std::string* error);
+
+	// 短信验证码登录（网易云风控下比账密可靠）
+	bool SendSmsCaptcha(const std::string& phone, std::string* error);
+	bool LoginWithCaptcha(const std::string& phone, const std::string& captcha,
+		std::string* nickname, std::string* cookie, std::string* error);
+
+	// 扫码登录：取 key -> 画二维码 -> 轮询
+	bool QrKey(std::string* key, std::string* error);
+	// 返回 800 过期 / 801 等待 / 802 待确认 / 803 成功
+	bool QrPoll(const std::string& key, int* code, std::string* nickname,
+		std::string* cookie, std::string* error);
 	bool IsLoggedIn() const;
 	void SetCookie(const std::string& cookie);
 	std::string Cookie() const;

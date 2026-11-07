@@ -6,6 +6,7 @@
 #include "SongHeader.h"
 #include "SongItem.h"
 #include "TransportButton.h"
+#include "UserMenuItem.h"
 #include "audio/Player.h"
 
 #include <Alert.h>
@@ -18,6 +19,7 @@
 #include <Menu.h>
 #include <MenuBar.h>
 #include <MenuItem.h>
+#include <PopUpMenu.h>
 #include <MessageRunner.h>
 #include <ScrollView.h>
 #include <Slider.h>
@@ -150,9 +152,9 @@ MainWindow::MainWindow()
 	fMenuBar = new BMenuBar("menubar");
 	_BuildMenu();
 
-	// 登录状态直接放在菜单栏里（不是按钮），和 HaikuDepot 一致
-	fUserItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
-	fMenuBar->AddItem(fUserItem);
+	// 登录状态贴在菜单栏最右侧，是一段可点文字（不是按钮），对齐 HaikuDepot
+	fUserItem = new UserMenuItem(new BMessage(kMessageUserMenu));
+	fUserItem->SetLabel(B_TRANSLATE("登录…"));
 
 	fSearchField = new BTextControl("search", B_TRANSLATE("搜索"), "",
 		new BMessage(kMessageSearch));
@@ -200,7 +202,10 @@ MainWindow::MainWindow()
 	fStatus = new BStringView("status", B_TRANSLATE("输入关键词开始搜索"));
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
-		.Add(fMenuBar)
+		.AddGroup(B_HORIZONTAL, 0)
+			.Add(fMenuBar, 1.0f)
+			.Add(fUserItem)
+		.End()
 		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
 			.SetInsets(B_USE_WINDOW_INSETS)
 			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
@@ -238,8 +243,7 @@ MainWindow::MainWindow()
 		label << nickname.c_str() << " 登录";
 		fUserItem->SetLabel(label.String());
 		fUserItem->SetEnabled(false);
-		if (fLogoutItem != nullptr)
-			fLogoutItem->SetEnabled(true);
+		fUserItem->Invalidate();
 	}
 }
 
@@ -268,19 +272,11 @@ void MainWindow::_BuildMenu()
 	musicMenu->AddItem(new BMenuItem(B_TRANSLATE("播放列表…"),
 		new BMessage(kMessagePlaylist), 'L'));
 
-	fAccountMenu = new BMenu(B_TRANSLATE("账号"));
-	fLoginItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
-	fLogoutItem = new BMenuItem(B_TRANSLATE("退出登录"), new BMessage(kMessageLogout));
-	fLogoutItem->SetEnabled(false);
-	fAccountMenu->AddItem(fLoginItem);
-	fAccountMenu->AddItem(fLogoutItem);
-
 	BMenu* helpMenu = new BMenu(B_TRANSLATE("帮助"));
 	helpMenu->AddItem(new BMenuItem(B_TRANSLATE("关于 HaikuNCM"), new BMessage(kMessageAbout)));
 
 	fMenuBar->AddItem(fileMenu);
 	fMenuBar->AddItem(musicMenu);
-	fMenuBar->AddItem(fAccountMenu);
 	fMenuBar->AddItem(helpMenu);
 }
 
@@ -441,6 +437,24 @@ void MainWindow::MessageReceived(BMessage* message)
 			return;
 		}
 
+		case kMessageUserMenu:
+		{
+			BPopUpMenu* menu = new BPopUpMenu("user", false, false);
+			menu->SetFont(be_plain_font);
+			menu->AddItem(new BMenuItem(B_TRANSLATE("登录…"),
+				new BMessage(kMessageLogin)));
+			BMenuItem* logout = new BMenuItem(B_TRANSLATE("退出登录"),
+				new BMessage(kMessageLogout));
+			logout->SetEnabled(fApi->IsLoggedIn());
+			menu->AddItem(logout);
+
+			menu->SetTargetForItems(this);
+			BPoint where(Bounds().right - 40.0f, 12.0f);
+			ConvertToScreen(&where);
+			menu->Go(where, true, true, true);
+			return;
+		}
+
 		case kMessageLogin:
 			(new LoginWindow(BMessenger(this)))->Show();
 			return;
@@ -458,8 +472,6 @@ void MainWindow::MessageReceived(BMessage* message)
 				label << nickname << " 登录";
 				fUserItem->SetLabel(label.String());
 				fUserItem->SetEnabled(false);
-				if (fLogoutItem != nullptr)
-					fLogoutItem->SetEnabled(true);
 
 				BString status("已登录: ");
 				status << nickname;
@@ -473,8 +485,6 @@ void MainWindow::MessageReceived(BMessage* message)
 			remove(SessionPath().c_str());
 			fUserItem->SetLabel(B_TRANSLATE("登录…"));
 			fUserItem->SetEnabled(true);
-			if (fLogoutItem != nullptr)
-				fLogoutItem->SetEnabled(false);
 			fStatus->SetText(B_TRANSLATE("已退出登录"));
 			return;
 

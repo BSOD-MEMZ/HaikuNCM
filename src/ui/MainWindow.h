@@ -19,6 +19,7 @@ class BSlider;
 class BStringView;
 class BTextControl;
 class SongHeader;
+class UserMenuItem;
 class TransportButton;
 
 namespace ncm {
@@ -44,6 +45,9 @@ enum {
 	kMessageMode = 'mode',
 	kMessageLike = 'like',
 	kMessagePlaylist = 'plst',
+	kMessageUserMenu = 'usrr',
+	kMessageShowLogin = 'shlg',
+	kMessageDoLogout = 'dlgo',
 };
 
 class MainWindow : public BWindow {
@@ -77,10 +81,7 @@ private:
 	static int32 _CoverThread(void* data);
 
 	BMenuBar* fMenuBar = nullptr;
-	BMenu* fAccountMenu = nullptr;
-	BMenuItem* fLoginItem = nullptr;
-	BMenuItem* fLogoutItem = nullptr;
-	BMenuItem* fUserItem = nullptr;
+	UserMenuItem* fUserItem = nullptr;
 
 	BTextControl* fSearchField = nullptr;
 	BButton* fSearchButton = nullptr;

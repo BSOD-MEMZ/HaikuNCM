@@ -5,6 +5,7 @@ LDLIBS = -lcurl -lssl -lcrypto -lnetwork
 
 NET_SRC = $(wildcard src/net/*.cpp)
 UI_SRC = $(wildcard src/ui/*.cpp src/audio/*.cpp)
+THIRD_SRC = third_party/qrcodegen/qrcodegen.cpp
 BUILD_DIR = build
 
 all: $(BUILD_DIR)/HaikuNCM $(BUILD_DIR)/ncmcli $(BUILD_DIR)/audiotest $(BUILD_DIR)/wavdump
@@ -13,7 +14,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/HaikuNCM: $(NET_SRC) $(UI_SRC) src/main.cpp third_party/nlohmann/json.hpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) $(UI_SRC) src/main.cpp -lbe -lmedia -ltranslation -llocalestub $(LDLIBS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) $(UI_SRC) src/main.cpp $(THIRD_SRC) -lbe -lmedia -ltranslation -llocalestub $(LDLIBS)
 
 $(BUILD_DIR)/ncmcli: $(NET_SRC) tools/ncmcli.cpp third_party/nlohmann/json.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) tools/ncmcli.cpp $(LDLIBS)

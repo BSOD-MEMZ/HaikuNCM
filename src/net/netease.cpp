@@ -179,6 +179,182 @@ bool NeteaseApi::Login(const std::string& phone, const std::string& password,
 	return true;
 }
 
+namespace {
+
+// 把上一步拿到的 Cookie 落进全局，供后续请求复用
+void AdoptCookies(const Response& response, std::string* cookie)
+{
+	const std::string musicU = ExtractCookie(response.headers, "MUSIC_U");
+	const std::string csrf = ExtractCookie(response.headers, "__csrf");
+	if (musicU.empty())
+		return;
+
+	gCookie = "MUSIC_U=" + musicU;
+	if (!csrf.empty())
+		gCookie += "; __csrf=" + csrf;
+	if (cookie != nullptr)
+		*cookie = gCookie;
+}
+
+bool ParseJson(const Response& response, json* document, std::string* error)
+{
+	try {
+		*document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON 解析失败: ") + exception.what();
+		return false;
+	}
+	return true;
+}
+
+std::string WeapiBody(const json& payload)
+{
+	const WeapiForm form = Weapi(payload.dump());
+	return "params=" + UrlEncode(form.params)
+		+ "&encSecKey=" + UrlEncode(form.encSecKey);
+}
+
+} // namespace
+
+bool NeteaseApi::SendSmsCaptcha(const std::string& phone, std::string* error)
+{
+	const json payload = {
+		{ "cellphone", phone },
+		{ "ctcode", "86" },
+	};
+
+	const Response response = PostForm("https://music.163.com/weapi/sms/captcha/sent",
+		WeapiBody(payload), BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	if (!ParseJson(response, &document, error))
+		return false;
+
+	const int code = document.value("code", -1);
+	if (code != 200) {
+		if (error != nullptr)
+			*error = document.value("message", "发送失败")
+				+ "（code " + std::to_string(code) + "）";
+		return false;
+	}
+	return true;
+}
+
+bool NeteaseApi::LoginWithCaptcha(const std::string& phone,
+	const std::string& captcha, std::string* nickname, std::string* cookie,
+	std::string* error)
+{
+	const json payload = {
+		{ "phone", phone },
+		{ "countrycode", "86" },
+		{ "captcha", captcha },
+		{ "rememberLogin", "true" },
+	};
+
+	const Response response = PostForm("https://music.163.com/weapi/login/cellphone",
+		WeapiBody(payload), BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	if (!ParseJson(response, &document, error))
+		return false;
+
+	const int code = document.value("code", -1);
+	if (code != 200) {
+		if (error != nullptr)
+			*error = document.value("message", "登录被拒")
+				+ "（code " + std::to_string(code) + "）";
+		return false;
+	}
+
+	AdoptCookies(response, cookie);
+	if (gCookie.empty()) {
+		if (error != nullptr)
+			*error = "登录响应里没有 MUSIC_U";
+		return false;
+	}
+
+	if (nickname != nullptr && document.contains("profile"))
+		*nickname = document["profile"].value("nickname", "");
+	return true;
+}
+
+bool NeteaseApi::QrKey(std::string* key, std::string* error)
+{
+	const json payload = { { "type", 1 } };
+	const Response response = PostForm(
+		"https://music.163.com/weapi/login/qrcode/unikey", WeapiBody(payload),
+		BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	if (!ParseJson(response, &document, error))
+		return false;
+
+	const int code = document.value("code", -1);
+	const std::string unikey = document.value("unikey", "");
+	if (code != 200 || unikey.empty()) {
+		if (error != nullptr)
+			*error = "取二维码 key 失败（code " + std::to_string(code) + "）";
+		return false;
+	}
+
+	*key = unikey;
+	return true;
+}
+
+bool NeteaseApi::QrPoll(const std::string& key, int* code,
+	std::string* nickname, std::string* cookie, std::string* error)
+{
+	const json payload = {
+		{ "key", key },
+		{ "type", 1 },
+	};
+
+	const Response response = PostForm(
+		"https://music.163.com/weapi/login/qrcode/client/login",
+		WeapiBody(payload), BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	if (!ParseJson(response, &document, error))
+		return false;
+
+	*code = document.value("code", -1);
+	if (*code == 803) {
+		AdoptCookies(response, cookie);
+		if (nickname != nullptr && document.contains("nickname"))
+			*nickname = document.value("nickname", "");
+	}
+	return true;
+}
+
 bool NeteaseApi::LikeSong(long long id, bool like, std::string* error)
 {
 	if (gCookie.empty()) {
