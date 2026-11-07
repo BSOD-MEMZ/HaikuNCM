@@ -14,6 +14,8 @@ public:
 		kPlay,
 		kPause,
 		kNext,
+		kHeart,
+		kHeartFilled,
 	};
 
 	TransportButton(const char* name, Kind kind, const char* tooltip,

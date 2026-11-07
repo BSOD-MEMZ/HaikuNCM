@@ -22,6 +22,9 @@ public:
 	bool IsPlaying() const;
 	std::string Description() const;
 
+	void SetGain(float gain);
+	float Gain() const;
+
 	double DurationSeconds() const;
 	double PositionSeconds() const;
 	bool Seek(double seconds, std::string* error);

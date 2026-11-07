@@ -179,6 +179,53 @@ bool NeteaseApi::Login(const std::string& phone, const std::string& password,
 	return true;
 }
 
+bool NeteaseApi::LikeSong(long long id, bool like, std::string* error)
+{
+	if (gCookie.empty()) {
+		if (error != nullptr)
+			*error = "需要先登录";
+		return false;
+	}
+
+	const json payload = {
+		{ "alg", "itembased" },
+		{ "trackId", id },
+		{ "like", like ? "true" : "false" },
+		{ "time", "3" },
+	};
+
+	const WeapiForm form = Weapi(payload.dump());
+	const std::string body = "params=" + UrlEncode(form.params)
+		+ "&encSecKey=" + UrlEncode(form.encSecKey);
+
+	const Response response = PostForm("https://music.163.com/weapi/song/like",
+		body, BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON 解析失败: ") + exception.what();
+		return false;
+	}
+
+	const int code = document.value("code", -1);
+	if (code != 200) {
+		if (error != nullptr)
+			*error = "code " + std::to_string(code);
+		return false;
+	}
+	return true;
+}
+
 bool NeteaseApi::IsLoggedIn() const
 {
 	return !gCookie.empty();

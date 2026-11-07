@@ -19,6 +19,7 @@ struct Player::Impl {
 	int channels = 0;
 	float peak = 0.0f;
 	volatile int64 framesRendered = 0;
+	float gain = 1.0f;
 	volatile bool finished = false;
 
 	static void Render(void* cookie, void* buffer, size_t size,
@@ -43,9 +44,11 @@ void Player::Impl::Render(void* cookie, void* buffer, size_t size,
 
 	self->framesRendered += frames;
 
-	const float* samples = static_cast<float*>(buffer);
+	float* samples = static_cast<float*>(buffer);
 	const size_t count = frames * format.channel_count;
 	for (size_t i = 0; i < count; i++) {
+		if (self->gain != 1.0f)
+			samples[i] *= self->gain;
 		const float value = samples[i] < 0 ? -samples[i] : samples[i];
 		if (value > self->peak)
 			self->peak = value;
@@ -167,6 +170,20 @@ void Player::Stop()
 bool Player::IsLoaded() const
 {
 	return fImpl->track != nullptr;
+}
+
+void Player::SetGain(float gain)
+{
+	if (gain < 0.0f)
+		gain = 0.0f;
+	if (gain > 1.0f)
+		gain = 1.0f;
+	fImpl->gain = gain;
+}
+
+float Player::Gain() const
+{
+	return fImpl->gain;
 }
 
 bool Player::IsPlaying() const

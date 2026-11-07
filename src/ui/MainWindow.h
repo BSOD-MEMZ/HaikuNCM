@@ -40,6 +40,10 @@ enum {
 	kMessagePrev = 'prev',
 	kMessageNext = 'next',
 	kMessageTick = 'tick',
+	kMessageVolume = 'volm',
+	kMessageMode = 'mode',
+	kMessageLike = 'like',
+	kMessagePlaylist = 'plst',
 };
 
 class MainWindow : public BWindow {
@@ -63,6 +67,10 @@ private:
 	void _PostIfAlive(BMessage* message);
 	void _StartCoverDownload();
 	void _TogglePlayback();
+	void _CyclePlayMode();
+	void _ToggleLike();
+	void _OpenPlaylist();
+	void _UpdateModeLabel();
 
 	static int32 _SearchThread(void* data);
 	static int32 _PlayThread(void* data);
@@ -72,7 +80,7 @@ private:
 	BMenu* fAccountMenu = nullptr;
 	BMenuItem* fLoginItem = nullptr;
 	BMenuItem* fLogoutItem = nullptr;
-	BButton* fLoginButton = nullptr;
+	BMenuItem* fUserItem = nullptr;
 
 	BTextControl* fSearchField = nullptr;
 	BButton* fSearchButton = nullptr;
@@ -84,11 +92,17 @@ private:
 	TransportButton* fNextButton = nullptr;
 	BSlider* fSeek = nullptr;
 	BStringView* fTimeLabel = nullptr;
+	BSlider* fVolume = nullptr;
+	BStringView* fVolumeLabel = nullptr;
+	TransportButton* fHeartButton = nullptr;
+	BButton* fModeButton = nullptr;
 	BStringView* fStatus = nullptr;
 
 	ncm::Player* fPlayer = nullptr;
 	BMessageRunner* fTicker = nullptr;
 	int32 fCurrentIndex = -1;
+	int32 fPlayMode = 0; // 0 顺序 1 单曲 2 随机
+	bool fLiked = false;
 	bool fSeeking = false;
 
 	BLocker fLock;

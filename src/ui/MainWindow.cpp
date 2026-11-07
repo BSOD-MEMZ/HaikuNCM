@@ -2,6 +2,7 @@
 
 #include "ListMetrics.h"
 #include "LoginWindow.h"
+#include "PlaylistWindow.h"
 #include "SongHeader.h"
 #include "SongItem.h"
 #include "TransportButton.h"
@@ -149,8 +150,9 @@ MainWindow::MainWindow()
 	fMenuBar = new BMenuBar("menubar");
 	_BuildMenu();
 
-	fLoginButton = new BButton("login-button", B_TRANSLATE("登录…"),
-		new BMessage(kMessageLogin));
+	// 登录状态直接放在菜单栏里（不是按钮），和 HaikuDepot 一致
+	fUserItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
+	fMenuBar->AddItem(fUserItem);
 
 	fSearchField = new BTextControl("search", B_TRANSLATE("搜索"), "",
 		new BMessage(kMessageSearch));
@@ -179,14 +181,26 @@ MainWindow::MainWindow()
 	fSeek->SetEnabled(false);
 
 	fTimeLabel = new BStringView("time", "0:00 / 0:00");
+
+	fHeartButton = new TransportButton("like", TransportButton::kHeart,
+		B_TRANSLATE("喜欢"), new BMessage(kMessageLike));
+	fHeartButton->SetExplicitMaxSize(BSize(36, 28));
+
+	fModeButton = new BButton("mode", B_TRANSLATE("顺序"),
+		new BMessage(kMessageMode));
+	fModeButton->SetExplicitMinSize(BSize(56, B_SIZE_UNSET));
+	fModeButton->SetToolTip(B_TRANSLATE("播放模式"));
+
+	fVolume = new BSlider("volume", nullptr, new BMessage(kMessageVolume), 0,
+		100, B_HORIZONTAL);
+	fVolume->SetValue(100);
+	fVolume->SetExplicitMinSize(BSize(90, B_SIZE_UNSET));
+	fVolume->SetExplicitMaxSize(BSize(120, B_SIZE_UNSET));
+	fVolumeLabel = new BStringView("volume-label", "100%");
 	fStatus = new BStringView("status", B_TRANSLATE("输入关键词开始搜索"));
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
-		.AddGroup(B_HORIZONTAL, 0)
-			.Add(fMenuBar)
-			.Add(fLoginButton)
-			.SetInsets(0, 0, B_USE_SMALL_SPACING, 0)
-		.End()
+		.Add(fMenuBar)
 		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
 			.SetInsets(B_USE_WINDOW_INSETS)
 			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
@@ -201,6 +215,10 @@ MainWindow::MainWindow()
 				.Add(fNextButton)
 				.Add(fSeek, 1.0f)
 				.Add(fTimeLabel)
+				.Add(fHeartButton)
+				.Add(fModeButton)
+				.Add(fVolume)
+				.Add(fVolumeLabel)
 			.End()
 			.Add(fStatus)
 		.End();
@@ -218,8 +236,8 @@ MainWindow::MainWindow()
 		fApi->SetCookie(cookie);
 		BString label("使用 ");
 		label << nickname.c_str() << " 登录";
-		fLoginButton->SetLabel(label.String());
-		fLoginButton->SetEnabled(false);
+		fUserItem->SetLabel(label.String());
+		fUserItem->SetEnabled(false);
 		if (fLogoutItem != nullptr)
 			fLogoutItem->SetEnabled(true);
 	}
@@ -246,6 +264,9 @@ void MainWindow::_BuildMenu()
 	BMenuItem* recent = new BMenuItem(B_TRANSLATE("最近播放"), new BMessage(kMessageStatus));
 	recent->SetEnabled(false);
 	musicMenu->AddItem(recent);
+	musicMenu->AddSeparatorItem();
+	musicMenu->AddItem(new BMenuItem(B_TRANSLATE("播放列表…"),
+		new BMessage(kMessagePlaylist), 'L'));
 
 	fAccountMenu = new BMenu(B_TRANSLATE("账号"));
 	fLoginItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
@@ -321,11 +342,17 @@ void MainWindow::MessageReceived(BMessage* message)
 		case kMessageNext:
 		{
 			const int32 count = fResults->CountItems();
+			if (count <= 0)
+				return;
+
 			int32 target = 0;
-			if (fCurrentIndex >= 0 && fCurrentIndex + 1 < count)
+			if (fPlayMode == 1)
+				target = fCurrentIndex >= 0 ? fCurrentIndex : 0;
+			else if (fPlayMode == 2)
+				target = rand() % count;
+			else if (fCurrentIndex >= 0 && fCurrentIndex + 1 < count)
 				target = fCurrentIndex + 1;
-			if (count > 0)
-				_StartPlay(target);
+			_StartPlay(target);
 			return;
 		}
 
@@ -384,6 +411,36 @@ void MainWindow::MessageReceived(BMessage* message)
 				_UpdateTransport();
 			return;
 
+		case kMessageVolume:
+		{
+			const float gain = fVolume->Value() / 100.0f;
+			fPlayer->SetGain(gain);
+			BString label;
+			label << static_cast<int32>(fVolume->Value()) << "%";
+			fVolumeLabel->SetText(label.String());
+			return;
+		}
+
+		case kMessageMode:
+			_CyclePlayMode();
+			return;
+
+		case kMessageLike:
+			_ToggleLike();
+			return;
+
+		case kMessagePlaylist:
+			_OpenPlaylist();
+			return;
+
+		case kMessagePlayIndex:
+		{
+			int32 index = -1;
+			if (message->FindInt32("index", &index) == B_OK)
+				_StartPlay(index);
+			return;
+		}
+
 		case kMessageLogin:
 			(new LoginWindow(BMessenger(this)))->Show();
 			return;
@@ -399,8 +456,8 @@ void MainWindow::MessageReceived(BMessage* message)
 
 				BString label("使用 ");
 				label << nickname << " 登录";
-				fLoginButton->SetLabel(label.String());
-				fLoginButton->SetEnabled(false);
+				fUserItem->SetLabel(label.String());
+				fUserItem->SetEnabled(false);
 				if (fLogoutItem != nullptr)
 					fLogoutItem->SetEnabled(true);
 
@@ -414,8 +471,8 @@ void MainWindow::MessageReceived(BMessage* message)
 		case kMessageLogout:
 			fApi->SetCookie(std::string());
 			remove(SessionPath().c_str());
-			fLoginButton->SetLabel(B_TRANSLATE("登录…"));
-			fLoginButton->SetEnabled(true);
+			fUserItem->SetLabel(B_TRANSLATE("登录…"));
+			fUserItem->SetEnabled(true);
 			if (fLogoutItem != nullptr)
 				fLogoutItem->SetEnabled(false);
 			fStatus->SetText(B_TRANSLATE("已退出登录"));
@@ -662,6 +719,61 @@ void MainWindow::_TogglePlayback()
 		fPlayButton->SetKind(TransportButton::kPause);
 	else
 		fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
+}
+
+void MainWindow::_CyclePlayMode()
+{
+	fPlayMode = (fPlayMode + 1) % 3;
+	_UpdateModeLabel();
+}
+
+void MainWindow::_UpdateModeLabel()
+{
+	static const char* labels[3] = {
+		B_TRANSLATE("顺序"),
+		B_TRANSLATE("单曲"),
+		B_TRANSLATE("随机"),
+	};
+	fModeButton->SetLabel(labels[fPlayMode]);
+}
+
+void MainWindow::_ToggleLike()
+{
+	if (fCurrentIndex < 0) {
+		fStatus->SetText(B_TRANSLATE("先播放一首歌"));
+		return;
+	}
+
+	fLock.Lock();
+	const long long id = static_cast<size_t>(fCurrentIndex) < fSongs.size()
+		? fSongs[fCurrentIndex].id
+		: 0;
+	fLock.Unlock();
+	if (id == 0)
+		return;
+
+	const bool target = !fLiked;
+	std::string error;
+	if (!fApi->LikeSong(id, target, &error)) {
+		fStatus->SetText(Prefixed(B_TRANSLATE("喜欢失败: "), error));
+		return;
+	}
+
+	fLiked = target;
+	fHeartButton->SetKind(fLiked ? TransportButton::kHeartFilled
+								 : TransportButton::kHeart);
+	fHeartButton->Invalidate();
+	fStatus->SetText(fLiked ? B_TRANSLATE("已加入我喜欢的音乐")
+							: B_TRANSLATE("已从我喜欢的音乐移除"));
+}
+
+void MainWindow::_OpenPlaylist()
+{
+	fLock.Lock();
+	std::vector<ncm::Song> songs = fSongs;
+	fLock.Unlock();
+
+	(new PlaylistWindow(BMessenger(this), songs, fCurrentIndex))->Show();
 }
 
 void MainWindow::_UpdateTransport()

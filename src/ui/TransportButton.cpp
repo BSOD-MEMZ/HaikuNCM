@@ -2,6 +2,7 @@
 
 #include "ListMetrics.h"
 
+#include <Shape.h>
 #include <Window.h>
 
 namespace {
@@ -104,6 +105,33 @@ void TransportButton::_DrawGlyph(BRect bounds, rgb_color color)
 				BPoint(centerX - 3.5f, centerY),
 			};
 			FillPolygon(points, 3);
+			break;
+		}
+
+		case kHeart:
+		case kHeartFilled:
+		{
+			// 两段贝塞尔拼成的心形，实心/空心都走同一条路径
+			BShape heart;
+			heart.MoveTo(BPoint(centerX, centerY + 5.5f));
+			heart.BezierTo(BPoint(centerX - 7.0f, centerY + 0.5f),
+				BPoint(centerX - 7.0f, centerY - 5.0f),
+				BPoint(centerX - 3.5f, centerY - 5.0f));
+			heart.BezierTo(BPoint(centerX - 1.5f, centerY - 5.0f),
+				BPoint(centerX, centerY - 3.0f),
+				BPoint(centerX, centerY - 1.5f));
+			heart.BezierTo(BPoint(centerX, centerY - 3.0f),
+				BPoint(centerX + 1.5f, centerY - 5.0f),
+				BPoint(centerX + 3.5f, centerY - 5.0f));
+			heart.BezierTo(BPoint(centerX + 7.0f, centerY - 5.0f),
+				BPoint(centerX + 7.0f, centerY + 0.5f),
+				BPoint(centerX, centerY + 5.5f));
+			heart.Close();
+
+			if (fKind == kHeartFilled)
+				FillShape(&heart);
+			else
+				StrokeShape(&heart);
 			break;
 		}
 

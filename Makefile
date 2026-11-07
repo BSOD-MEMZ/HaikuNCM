@@ -37,7 +37,12 @@ catkeys: $(BUILD_DIR)
 # 二进制 .catalog 需要 makecat 生成的校验和（beta6 未随开发包提供），
 # 目前只产出翻译模板；等 makecat 可用后再补 linkcatkeys 这一步。
 
+# 应用资源（签名、版本、图标）
+rdef: $(BUILD_DIR)/HaikuNCM
+	rc -o $(BUILD_DIR)/HaikuNCM.rsrc rdef/app.rdef
+	xres -o $(BUILD_DIR)/HaikuNCM $(BUILD_DIR)/HaikuNCM.rsrc
+
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all clean catkeys catalog
+.PHONY: all clean catkeys rdef

@@ -1,0 +1,19 @@
+// HaikuNCM 应用资源。
+// 图标暂时缺 HVIF：见 icon/README-icon.md，用 Icon-O-Matic 导出后把
+//   resource(1, "BEOS:ICON") #'VICN' import "ncm-icon.hvif";
+// 这一行打开即可。
+
+resource app_signature "application/x-vnd.HaikuNCM";
+resource app_name_catalog_entry "x-vnd.HaikuNCM:System name:HaikuNCM";
+
+resource app_version {
+	major      = 1,
+	middle     = 0,
+	minor      = 0,
+	variety    = B_APPV_BETA,
+	internal   = 0,
+	short_info = "HaikuNCM",
+	long_info  = "HaikuNCM - Haiku 原生网易云音乐客户端"
+};
+
+resource app_flags B_SINGLE_LAUNCH;
