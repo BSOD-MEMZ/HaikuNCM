@@ -17,17 +17,16 @@ class BMenuItem;
 class BMenuBar;
 class BMessageRunner;
 class BSlider;
-class SeekSlider;
 class BStringView;
+class BTabView;
 class BTextControl;
+class BView;
+class BCardView;
 class PlaylistWindow;
 class NowPlayingBadge;
-class NowPlayingWindow;
+class NowPlayingView;
+class SeekSlider;
 class SongListView;
-class BCardView;
-class BTabView;
-class SongHeader;
-class BMenu;
 class TransportButton;
 
 namespace ncm {
@@ -43,7 +42,6 @@ enum {
 	kMessageQueueReorder = 'qreo',
 	kMessageQueueDelete = 'qdel',
 	kMessagePlayDone = 'pldn',
-	kMessageStatus = 'stat',
 	kMessageFocusSearch = 'fsrc',
 	kMessageLogin = 'logn',
 	kMessageLogout = 'lout',
@@ -57,14 +55,11 @@ enum {
 	kMessageLike = 'like',
 	kMessagePlaylist = 'plst',
 	kMessagePlayIndex = 'plix',
-	kMessageSearchTab = 'stab',
 	kMessageGenericOpen = 'gnop',
 	kMessageGenericDone = 'gdon',
 	kMessagePlaylistClosed = 'plcl',
-	kMessageDetailReady = 'dtrd',
-	kMessageUserMenu = 'usrr',
 	kMessageShowLogin = 'shlg',
-	kMessageDoLogout = 'dlgo',
+	kMessageToggleNowPlaying = 'nowp',
 };
 
 class MainWindow : public BWindow {
@@ -74,13 +69,18 @@ public:
 
 	void SearchFor(const char* keyword);
 	void PlayIndex(int32 index);
+	void SelectTab(int32 tab);
+	void ShowNowPlaying();
+	void ShowArtist(long long id, const char* name);
+	void ShowAlbum(long long id, const char* name);
 
 	void MessageReceived(BMessage* message) override;
-	void FrameResized(float width, float height) override;
 	bool QuitRequested() override;
 
 private:
 	void _BuildMenu();
+	void _BuildContent();
+	void _BuildTransport();
 	void _StartSearch();
 	void _StartPlay(int32 index);
 	void _FillResults();
@@ -93,10 +93,15 @@ private:
 	void _ToggleLike();
 	void _OpenPlaylist();
 	void _SyncPlaylist();
-	void _SwitchSearchCard();
-	void _FillGeneric();
-	void _OpenNowPlaying();
+	void _SyncTab();
+	void _SwitchToTab(int32 tab);
+	void _FetchGeneric(int32 slot);
+	void _FillGeneric(int32 slot);
+	void _ClearGeneric();
+	void _ToggleNowPlaying();
+	void _ShowNowPlayingPage(bool show);
 	void _StartNowPlayingThread();
+	void _Alert(const BString& text);
 	int32 _IndexOfSong(long long id);
 	void _UpdateModeLabel();
 
@@ -107,40 +112,43 @@ private:
 	static int32 _DetailThread(void* data);
 	static int32 _NowPlayingThread(void* data);
 
-	BView* fCards[7] = {nullptr, nullptr, nullptr, nullptr, nullptr,
-		nullptr, nullptr};
-
+	// 菜单
 	BMenuBar* fMenuBar = nullptr;
 	BMenuBar* fUserMenuBar = nullptr;
 	BMenu* fUserMenu = nullptr;
 	BMenuItem* fUserItem = nullptr;
 	BMenuItem* fLogoutItem = nullptr;
 
+	// 搜索 + 内容区
 	BTextControl* fSearchField = nullptr;
 	BButton* fSearchButton = nullptr;
-	SongListView* fResults = nullptr;
 	BTabView* fSearchTabs = nullptr;
-	BView* fSongCard = nullptr;
-	BListView* fGenericList = nullptr;
-	std::vector<ncm::GenericItem> fGenericItems;
-	int32 fSearchType = 1;
-	bool fTabsReady = false;
 	BCardView* fContentHost = nullptr;
-	std::string fCacheDir;
+	SongListView* fResults = nullptr;
+	BListView* fGenericLists[5] = {nullptr, nullptr, nullptr, nullptr,
+		nullptr};
+	std::vector<ncm::GenericItem> fGenericItems[5];
+	bool fGenericReady[5] = {false, false, false, false, false};
+	bool fGenericLoading[5] = {false, false, false, false, false};
+	int32 fTabIndex = 0;
+	int32 fSearchType = 1;
+	bool fSongReady = false;
 
+	// 播放页（内容区切换，不再单开窗口）
+	NowPlayingView* fNowView = nullptr;
 	NowPlayingBadge* fNowBadge = nullptr;
-	NowPlayingWindow* fNowPlayingWindow = nullptr;
+	bool fShowingNow = false;
 
+	// 底部播放底板
+	BView* fTransport = nullptr;
 	TransportButton* fPrevButton = nullptr;
 	TransportButton* fPlayButton = nullptr;
 	TransportButton* fNextButton = nullptr;
 	SeekSlider* fSeek = nullptr;
 	BStringView* fTimeLabel = nullptr;
 	BSlider* fVolume = nullptr;
-	BStringView* fVolumeLabel = nullptr;
 	TransportButton* fHeartButton = nullptr;
 	BButton* fModeButton = nullptr;
-	BStringView* fStatus = nullptr;
 
 	ncm::Player* fPlayer = nullptr;
 	BMessageRunner* fTicker = nullptr;

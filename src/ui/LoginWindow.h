@@ -33,8 +33,8 @@ private:
 	std::vector<bool> fModules;
 };
 
-// 三种登录方式：手机验证码 / 扫码 / 密码。
-// 网易云风控很严，账密经常被直接拒，验证码和扫码才是主力。
+// 三种登录方式：扫码 / 手机验证码 / 密码。
+// 网易云风控很严，账密经常被直接拒，扫码和验证码才是主力。
 class LoginWindow : public BWindow {
 public:
 	explicit LoginWindow(BMessenger target);
@@ -53,6 +53,7 @@ private:
 	void _StartQrLogin();
 	void _StartPasswordLogin();
 	void _SetStatus(const char* text);
+	void _Fail(const char* text);
 
 	static int32 _CaptchaThread(void* data);
 	static int32 _SmsThread(void* data);
@@ -60,7 +61,6 @@ private:
 	static int32 _QrThread(void* data);
 
 	BMessenger fTarget;
-	BStringView* fStatus = nullptr;
 
 	BTextControl* fSmsPhone = nullptr;
 	BTextControl* fCode = nullptr;

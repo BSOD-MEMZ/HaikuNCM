@@ -5,11 +5,16 @@ Haiku 原生的第三方网易云音乐客户端。C++17，Interface Kit + Media
 ## 功能
 
 - 搜索 / 取流 / 下载播放（weapi + eapi 协议，全部独立实现）
-- 歌曲表：封面、双行标题（标题+歌手）、专辑、喜欢、时长，自绘 `BListItem`
-- 播放条：上一首 / 播放暂停 / 下一首 / 进度条 / 音量 / 播放模式（顺序·单曲·随机）
+- 聚合搜索：单曲 / 歌单 / 专辑 / 歌手 / 用户 / 声音 六个类目 tab，
+  无边框 `BTabView` 直接压在列表上（HaikuDepot 同款），切 tab 按需拉取并缓存
+- 歌曲表：封面、双行标题（标题+歌手）、专辑、喜欢、时长，BColumnListView 自绘列
+- 歌手页 / 专辑页：新窗口，头像·封面 + 名字 + 简介，下面挂歌曲/专辑 tab，
+  双击歌曲直接把整批接成播放队列
+- 播放页：嵌在主窗口内容区（封面 + 滚动歌词），底部播放控件始终保留，不再单开窗口
+- 播放条：进度条压在底板顶部，封面·曲名在左、传输键居中、时间·红心·模式·音量在右
 - 红心：调 `/weapi/song/like`（需登录）
 - 播放列表窗口
-- 登录三方式：手机验证码 / 扫码（本地 qrcodegen 生成二维码 + 轮询）/ 密码
+- 登录三方式：扫码（默认页，开窗自动取码）/ 手机验证码 / 密码
 - i18n 钩子：全部文案走 `B_TRANSLATE`，`make catkeys` 抽翻译模板
 
 ## 构建（在 Haiku 上）
@@ -27,9 +32,11 @@ make catkeys  # 抽取翻译模板 build/zh-Hans.catkeys
 ```
 src/net/      crypto（weapi/eapi/MD5，OpenSSL）、http（libcurl）、netease（API 封装）
 src/audio/    Player：BMediaFile + BMediaTrack + BSoundPlayer 封装，增益/进度/Seek
-src/ui/       MainWindow、SongItem/SongHeader（自绘表格）、TransportButton（自绘传输按钮，
+src/ui/       MainWindow（内容区 + 底部播放底板）、DetailWindow（歌手页/专辑页）、
+              NowPlayingPage（LrcView 歌词 + CoverView 封面 + 底部徽章）、
+              SongRow（BColumnListView 的列/行）、TransportButton（自绘传输按钮，
               参考 Haiku MediaPlayer 的 SymbolButton：BShape + BControlLook + 渐变）、
-              LoginWindow（三页签 + QrView）、UserMenuItem（菜单栏右侧登录项）
+              LoginWindow（三页签 + QrView）
 tools/        ncmcli（终端验证工具）、wavdump（解码导 WAV）、proto_spike.py（协议基准）、
               make_catkeys.py（beta6 的 collectcatkeys 是坏的，自己抽）
 third_party/  nlohmann/json、nayuki qrcodegen（MIT）、simple-icons 网易云 logo 路径
@@ -47,6 +54,20 @@ icon/         SVG 源 + 64/32/16 PNG（HVIF 待 Icon-O-Matic 导出）
 - sshd 默认读 `~/config/settings/ssh/authorized_keys`（不是 `~/.ssh/`）；`user` 账号 uid=0，被 `PermitRootLogin` 管
 - beta6 开发包头里没有 HTTP 客户端 API，libcurl 是唯一现实选择
 - VMware 对 Haiku 模拟 ES1371 声卡无驱动、拒绝实例化 HDA → 出声要用 VirtualBox（AC'97，`auich` 驱动）
+- `BTabView` 构造时**显式传 flags 会顶掉默认的 `B_WILL_DRAW`**，整个 tab 条都画不出来
+- beta6 的接口叫 `SetBorder(border_style)`（不是 `SetBorderStyle`）；`B_NO_BORDER` 才能让 tab 贴着列表
+- `BTabView::Select()` 内部会 `Hide()/Show()` 子视图，**必须在窗口锁里调**，否则 `Looper must be locked` 直接崩
+- 自定义 `BControl`（如传输按钮）不实现 `GetPreferredSize` 就没有尺寸，放进布局会被压成 0 宽
+
+## 命令行（调试用）
+
+```
+./build/HaikuNCM --search "关键词" [--play N]   # 启动即搜索 / 搜完播第 N 首
+--tab N              # 启动时选中第 N 个类目（0 单曲 / 1 歌单 / 2 专辑 / 3 歌手 / 4 用户 / 5 声音）
+--now                # 启动即切到播放页
+--artist ID / --album ID   # 直接打开某个歌手页 / 专辑页
+--login / --playlist       # 打开登录窗口 / 播放列表
+```
 
 ## 协议
 

@@ -22,6 +22,26 @@ struct GenericItem {
 	std::string subtitle;
 };
 
+struct ArtistInfo {
+	long long id = 0;
+	std::string name;
+	std::string alias;
+	std::string avatarUrl;
+	std::string briefDesc;
+	int albumCount = 0;
+	int songCount = 0;
+};
+
+struct AlbumInfo {
+	long long id = 0;
+	std::string name;
+	std::string artist;
+	std::string coverUrl;
+	std::string publishTime;
+	std::string description;
+	int songCount = 0;
+};
+
 struct AudioUrl {
 	std::string url;
 	std::string type;
@@ -48,6 +68,14 @@ public:
 	bool FetchArtistSongs(long long id, std::vector<Song>* songs,
 		std::string* error);
 	bool FetchLyric(long long id, std::string* lrc, std::string* error);
+
+	// 歌手页 / 专辑页
+	bool FetchArtist(long long id, ArtistInfo* info,
+		std::vector<Song>* hotSongs, std::string* error);
+	bool FetchArtistAlbums(long long id, std::vector<AlbumInfo>* albums,
+		std::string* error);
+	bool FetchAlbumDetail(long long id, AlbumInfo* info,
+		std::vector<Song>* songs, std::string* error);
 
 	// 短信验证码登录（网易云风控下比账密可靠）
 	bool SendSmsCaptcha(const std::string& phone, std::string* error);

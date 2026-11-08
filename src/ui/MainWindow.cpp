@@ -1,29 +1,28 @@
 #include "MainWindow.h"
 
+#include "net/cachepaths.h"
 #include "net/HttpRangeSource.h"
+#include "DetailWindow.h"
 #include "LoginWindow.h"
+#include "NowPlayingPage.h"
 #include "PlaylistWindow.h"
 #include "SeekSlider.h"
-#include "NowPlayingWindow.h"
 #include "SongRow.h"
 #include "TransportButton.h"
 #include "audio/Player.h"
 
 #include <Alert.h>
-
-#include <Catalog.h>
 #include <Bitmap.h>
 #include <Button.h>
 #include <CardView.h>
+#include <Catalog.h>
+#include <GroupView.h>
 #include <LayoutBuilder.h>
 #include <ListView.h>
-#include <GroupView.h>
 #include <Menu.h>
 #include <MenuBar.h>
 #include <MenuItem.h>
-#include <PopUpMenu.h>
 #include <MessageRunner.h>
-#include <ScrollView.h>
 #include <Slider.h>
 #include <StringView.h>
 #include <TabView.h>
@@ -41,51 +40,22 @@
 
 namespace {
 
+using ncm::AudioPath;
+using ncm::BigCoverPath;
+using ncm::CacheDir;
+using ncm::CoverPath;
+using ncm::LyricPath;
+using ncm::SessionPath;
+
+// tab 顺序与网易云聚合搜索 type 一一对应
+const int32 kTabCount = 6;
+const int32 kTabTypes[kTabCount] = {1, 1000, 10, 100, 1002, 1009};
+
 BString Prefixed(const char* prefix, const std::string& detail)
 {
 	BString text(prefix);
 	text << detail.c_str();
 	return text;
-}
-
-std::string EnsureDir(const std::string& path)
-{
-	mkdir(path.c_str(), 0755);
-	return path;
-}
-
-std::string SessionDir()
-{
-	const char* home = getenv("HOME");
-	if (home == nullptr)
-		home = "/boot/home";
-	return EnsureDir(std::string(home) + "/HaikuNCM");
-}
-
-std::string CacheDir()
-{
-	return EnsureDir(SessionDir() + "/cache");
-}
-
-std::string CoverDir()
-{
-	return EnsureDir(CacheDir() + "/covers");
-}
-
-std::string CoverPath(long long id)
-{
-	return CoverDir() + "/" + std::to_string(id) + ".jpg";
-}
-
-std::string AudioPath(long long id, const std::string& type)
-{
-	return CacheDir() + "/" + std::to_string(id) + "."
-		+ (type.empty() ? "mp3" : type);
-}
-
-std::string SessionPath()
-{
-	return SessionDir() + "/session.txt";
 }
 
 void SaveSession(const std::string& cookie, const std::string& nickname)
@@ -140,31 +110,20 @@ std::string FormatTime(double seconds)
 	return buffer;
 }
 
-} // namespace
-
-// beta6 的 BTabView 没有选择消息 API，重写 Select() 自己发
-class SearchTabView : public BTabView {
-public:
-	SearchTabView(const char* name)
-		: BTabView(name, B_WIDTH_FROM_LABEL)
-	{
-	}
-
-	void Select(int32 index) override
-	{
-		BTabView::Select(index);
-		if (Window() != nullptr)
-			Window()->PostMessage(kMessageSearchTab);
-	}
+struct GenericJob {
+	MainWindow* window;
+	int32 slot;
+	BString keyword;
 };
 
+} // namespace
+
 MainWindow::MainWindow()
-	: BWindow(BRect(80, 80, 880, 660), "HaikuNCM", B_TITLED_WINDOW,
+	: BWindow(BRect(70, 60, 930, 700), "HaikuNCM", B_TITLED_WINDOW,
 		  B_QUIT_ON_WINDOW_CLOSE)
 {
 	fApi = new ncm::NeteaseApi();
 	fPlayer = new ncm::Player();
-	fCacheDir = CacheDir();
 
 	fMenuBar = new BMenuBar("menubar");
 	_BuildMenu();
@@ -182,7 +141,6 @@ MainWindow::MainWindow()
 		fMenuBar->MaxSize().height));
 
 	// 登录菜单：照抄 HaikuDepot —— 主菜单栏 + 右侧等高的用户菜单栏
-
 	fSearchField = new BTextControl("search", B_TRANSLATE("搜索"), "",
 		new BMessage(kMessageSearch));
 	fSearchField->SetModificationMessage(nullptr);
@@ -190,115 +148,27 @@ MainWindow::MainWindow()
 	fSearchButton = new BButton("search-button", B_TRANSLATE("搜索"),
 		new BMessage(kMessageSearch));
 
-	fResults = new SongListView();
-	fResults->SetInvocationMessage(new BMessage(kMessagePlay));
-	fGenericList = new BListView("generic", B_SINGLE_SELECTION_LIST);
-	fGenericList->SetInvocationMessage(new BMessage(kMessageGenericOpen));
-
-	const float scale = be_plain_font->Size() / 12.0f;
-	fResults->AddColumn(new SongTitleColumn(B_TRANSLATE("标题"),
-		280 * scale, 160 * scale, 600 * scale), 0);
-	fResults->AddColumn(new SongAlbumColumn(B_TRANSLATE("专辑"),
-		180 * scale, 80 * scale, 500 * scale), 1);
-	fResults->AddColumn(new SongHeartColumn(B_TRANSLATE("喜欢"),
-		50 * scale, 40 * scale, 80 * scale), 2);
-	fResults->AddColumn(new SongDurationColumn(B_TRANSLATE("时长"),
-		70 * scale, 50 * scale, 120 * scale), 3);
-	fResults->SetSortingEnabled(true);
-
-	const uint32 topBottom = BControlLook::B_TOP_BORDER
-		| BControlLook::B_BOTTOM_BORDER;
-	fPrevButton = new TransportButton("prev", TransportButton::kPrevious,
-		B_TRANSLATE("上一首"), new BMessage(kMessagePrev),
-		BControlLook::B_LEFT_BORDER | topBottom);
-	fPlayButton = new TransportButton("play", TransportButton::kPlay,
-		B_TRANSLATE("播放"), new BMessage(kMessagePlay), topBottom);
-	fNextButton = new TransportButton("next", TransportButton::kNext,
-		B_TRANSLATE("下一首"), new BMessage(kMessageNext),
-		BControlLook::B_RIGHT_BORDER | topBottom);
-
-	fSeek = new SeekSlider("seek", new BMessage(kMessageSeek), 0, 1000);
-	fSeek->SetExplicitMinSize(BSize(160, B_SIZE_UNSET));
-	fSeek->SetEnabled(false);
-
-	fTimeLabel = new BStringView("time", "0:00 / 0:00");
-	fNowBadge = new NowPlayingBadge();
-
-	fHeartButton = new TransportButton("like", TransportButton::kHeart,
-		B_TRANSLATE("喜欢"), new BMessage(kMessageLike));
-	fHeartButton->SetExplicitMaxSize(BSize(36, 28));
-
-	fModeButton = new BButton("mode", B_TRANSLATE("顺序"),
-		new BMessage(kMessageMode));
-	fModeButton->SetExplicitMinSize(BSize(56, B_SIZE_UNSET));
-	fModeButton->SetToolTip(B_TRANSLATE("播放模式"));
-
-	fVolume = new BSlider("volume", nullptr, new BMessage(kMessageVolume), 0,
-		100, B_HORIZONTAL);
-	fVolume->SetValue(100);
-	fVolume->SetExplicitMinSize(BSize(90, B_SIZE_UNSET));
-	fVolume->SetExplicitMaxSize(BSize(120, B_SIZE_UNSET));
-	fVolumeLabel = new BStringView("volume-label", "100%");
-	fStatus = new BStringView("status", B_TRANSLATE("输入关键词开始搜索"));
-
-	// 聚合搜索类目 tab：单曲/歌词走歌曲表，其余走通用列表
-	fSearchTabs = new SearchTabView("search-tabs");
-	static const char* kTabNames[7] = {
-		B_TRANSLATE("单曲"), B_TRANSLATE("歌单"), B_TRANSLATE("专辑"),
-		B_TRANSLATE("歌手"), B_TRANSLATE("用户"), B_TRANSLATE("歌词"),
-		B_TRANSLATE("声音"),
-	};
-	for (int32 i = 0; i < 7; i++) {
-		BGroupView* card = new BGroupView("card", B_VERTICAL, 0.0f);
-		card->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
-		BTab* tab = new BTab();
-		fSearchTabs->AddTab(card, tab);
-		tab->SetLabel(kTabNames[i]);
-		fCards[i] = card;
-	}
-
-	fContentHost = new BCardView();
-	fContentHost->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
-	fResults->SetResizingMode(B_FOLLOW_ALL_SIDES);
-	fGenericList->SetResizingMode(B_FOLLOW_ALL_SIDES);
-	fContentHost->CardLayout()->AddView(fResults);
-	fContentHost->CardLayout()->AddView(fGenericList);
-	fContentHost->CardLayout()->SetVisibleItem(0);
+	_BuildContent();
+	_BuildTransport();
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 		.AddGroup(B_HORIZONTAL, 0)
 			.Add(fMenuBar, 1.0f)
 			.Add(fUserMenuBar, 0.0f)
-		.End()
+			.End()
 		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
 			.SetInsets(B_USE_WINDOW_INSETS)
 			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
 				.Add(fSearchField)
 				.Add(fSearchButton)
-			.End()
-			.Add(fSearchTabs)
-			.Add(fContentHost, 1.0f)
-			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
-				.Add(fNowBadge)
-				.AddGlue()
-				.AddGroup(B_HORIZONTAL, 0)
-					.Add(fPrevButton)
-					.Add(fPlayButton)
-					.Add(fNextButton)
 				.End()
-				.Add(fSeek, 1.0f)
-				.Add(fTimeLabel)
-				.AddGlue()
-				.Add(fHeartButton)
-				.Add(fModeButton)
-				.Add(fVolume)
-				.Add(fVolumeLabel)
+			.Add(fContentHost, 1.0f)
 			.End()
-			.Add(fStatus)
+		.Add(fTransport)
 		.End();
 
-	SetSizeLimits(720, 4000, 400, 4000);
-	ResizeTo(800, 580);
+	SetSizeLimits(760, 4000, 420, 4000);
+	ResizeTo(860, 640);
 	CenterOnScreen();
 
 	fTicker = new BMessageRunner(BMessenger(this), new BMessage(kMessageTick),
@@ -311,6 +181,7 @@ MainWindow::MainWindow()
 		BString label(B_TRANSLATE("使用 "));
 		label << nickname.c_str();
 		fUserMenu->Superitem()->SetLabel(label.String());
+		fLogoutItem->SetEnabled(true);
 	}
 }
 
@@ -329,12 +200,9 @@ void MainWindow::_BuildMenu()
 	fileMenu->AddItem(new BMenuItem(B_TRANSLATE("退出"), new BMessage(B_QUIT_REQUESTED), 'Q'));
 
 	BMenu* musicMenu = new BMenu(B_TRANSLATE("音乐"));
-	BMenuItem* myMusic = new BMenuItem(B_TRANSLATE("我的音乐"), new BMessage(kMessageStatus));
-	myMusic->SetEnabled(false);
-	musicMenu->AddItem(myMusic);
-	BMenuItem* recent = new BMenuItem(B_TRANSLATE("最近播放"), new BMessage(kMessageStatus));
-	recent->SetEnabled(false);
-	musicMenu->AddItem(recent);
+	BMenuItem* nowPlaying = new BMenuItem(B_TRANSLATE("正在播放"),
+		new BMessage(kMessageToggleNowPlaying), 'P');
+	musicMenu->AddItem(nowPlaying);
 	musicMenu->AddSeparatorItem();
 	musicMenu->AddItem(new BMenuItem(B_TRANSLATE("播放列表…"),
 		new BMessage(kMessagePlaylist), 'L'));
@@ -347,10 +215,181 @@ void MainWindow::_BuildMenu()
 	fMenuBar->AddItem(helpMenu);
 }
 
+void MainWindow::_BuildContent()
+{
+	// 目录 tab 直接压在列表上（HaikuDepot 的做法：无边框 BTabView），
+	// 不再额外套一层"完整 tab 容器"，避免无谓留白。
+	// 注意：显式传 flags 会顶掉 B_WILL_DRAW，tab 就整个画不出来
+	fSearchTabs = new BTabView("search-tabs", B_WIDTH_FROM_LABEL);
+	fSearchTabs->SetBorder(B_NO_BORDER);
+	fSearchTabs->SetTabHeight(fSearchTabs->TabHeight() - 2.0f);
+	fSearchTabs->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+	fSearchTabs->SetExplicitMinSize(BSize(320, 200));
+
+	fResults = new SongListView();
+	fResults->SetInvocationMessage(new BMessage(kMessagePlay));
+	AddSongColumns(fResults);
+
+	BGroupView* songCard = new BGroupView("songs", B_VERTICAL, 0.0f);
+	BLayoutBuilder::Group<>(songCard, B_VERTICAL, 0.0f)
+		.Add(fResults, 1.0f)
+		.End();
+	BTab* songTab = new BTab();
+	fSearchTabs->AddTab(songCard, songTab);
+	songTab->SetLabel(B_TRANSLATE("单曲"));
+
+	static const char* kTabNames[kTabCount] = {
+		B_TRANSLATE("单曲"), B_TRANSLATE("歌单"), B_TRANSLATE("专辑"),
+		B_TRANSLATE("歌手"), B_TRANSLATE("用户"), B_TRANSLATE("声音"),
+	};
+
+	for (int32 i = 1; i < kTabCount; i++) {
+		BListView* list = new BListView("generic", B_SINGLE_SELECTION_LIST,
+			B_PLAIN_BORDER);
+		list->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
+		list->SetInvocationMessage(new BMessage(kMessageGenericOpen));
+		BGroupView* card = new BGroupView("card", B_VERTICAL, 0.0f);
+		BLayoutBuilder::Group<>(card, B_VERTICAL, 0.0f)
+			.Add(list, 1.0f)
+			.End();
+		BTab* tab = new BTab();
+		fSearchTabs->AddTab(card, tab);
+		tab->SetLabel(kTabNames[i]);
+		fGenericLists[i - 1] = list;
+	}
+
+	fNowView = new NowPlayingView();
+
+	fContentHost = new BCardView();
+	fContentHost->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+	fContentHost->CardLayout()->AddView(fSearchTabs);
+	fContentHost->CardLayout()->AddView(fNowView);
+	fContentHost->CardLayout()->SetVisibleItem(0);
+
+	fTabIndex = 0;
+	fSearchType = kTabTypes[0];
+}
+
+void MainWindow::_BuildTransport()
+{
+	const uint32 topBottom = BControlLook::B_TOP_BORDER
+		| BControlLook::B_BOTTOM_BORDER;
+	fPrevButton = new TransportButton("prev", TransportButton::kPrevious,
+		B_TRANSLATE("上一首"), new BMessage(kMessagePrev),
+		BControlLook::B_LEFT_BORDER | topBottom);
+	fPlayButton = new TransportButton("play", TransportButton::kPlay,
+		B_TRANSLATE("播放"), new BMessage(kMessagePlay), topBottom);
+	fNextButton = new TransportButton("next", TransportButton::kNext,
+		B_TRANSLATE("下一首"), new BMessage(kMessageNext),
+		BControlLook::B_RIGHT_BORDER | topBottom);
+
+	fSeek = new SeekSlider("seek", new BMessage(kMessageSeek), 0, 1000);
+	fSeek->SetExplicitMinSize(BSize(120, B_SIZE_UNSET));
+	fSeek->SetEnabled(false);
+
+	fTimeLabel = new BStringView("time", "0:00 / 0:00");
+	fTimeLabel->SetExplicitMinSize(BSize(76, B_SIZE_UNSET));
+
+	fNowBadge = new NowPlayingBadge();
+
+	fHeartButton = new TransportButton("like", TransportButton::kHeart,
+		B_TRANSLATE("喜欢"), new BMessage(kMessageLike));
+	fHeartButton->SetToolTip(B_TRANSLATE("喜欢"));
+
+	fModeButton = new BButton("mode", B_TRANSLATE("顺序"),
+		new BMessage(kMessageMode));
+	fModeButton->SetExplicitMinSize(BSize(56, B_SIZE_UNSET));
+	fModeButton->SetToolTip(B_TRANSLATE("播放模式"));
+
+	fVolume = new BSlider("volume", nullptr, new BMessage(kMessageVolume), 0,
+		100, B_HORIZONTAL);
+	fVolume->SetValue(100);
+	fVolume->SetExplicitMinSize(BSize(80, B_SIZE_UNSET));
+	fVolume->SetExplicitMaxSize(BSize(110, B_SIZE_UNSET));
+
+	// 左：封面 + 曲名；中：上一首/播放/下一首；右：时间/红心/模式/音量。
+	// 左右两块宽度一致，中间那组才真正居中。
+	BGroupView* left = new BGroupView("transport-left", B_HORIZONTAL, 0.0f);
+	BLayoutBuilder::Group<>(left, B_HORIZONTAL, 0.0f)
+		.Add(fNowBadge, 1.0f)
+		.End();
+	left->SetExplicitMinSize(BSize(300, 56));
+	left->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, 56));
+
+	BGroupView* center = new BGroupView("transport-center", B_HORIZONTAL,
+		0.0f);
+	BLayoutBuilder::Group<>(center, B_HORIZONTAL, 0.0f)
+		.Add(fPrevButton)
+		.Add(fPlayButton)
+		.Add(fNextButton)
+		.End();
+	center->SetExplicitMaxSize(BSize(B_SIZE_UNSET, 56));
+
+	BGroupView* right = new BGroupView("transport-right", B_HORIZONTAL,
+		B_USE_SMALL_SPACING);
+	BLayoutBuilder::Group<>(right, B_HORIZONTAL, B_USE_SMALL_SPACING)
+		.AddGlue()
+		.Add(fTimeLabel)
+		.Add(fHeartButton)
+		.Add(fModeButton)
+		.Add(fVolume)
+		.End();
+	right->SetExplicitMinSize(BSize(300, 56));
+	right->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, 56));
+
+	// 进度条压在底板最顶部，横贯整宽
+	fTransport = new BGroupView("transport", B_VERTICAL, 0.0f);
+	fTransport->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+	BLayoutBuilder::Group<>(fTransport, B_VERTICAL, 0.0f)
+		.Add(fSeek)
+		.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+			.SetInsets(B_USE_WINDOW_INSETS, 2, B_USE_WINDOW_INSETS, 6)
+			.Add(left, 1.0f)
+			.Add(center, 0.0f)
+			.Add(right, 1.0f)
+			.End()
+		.End();
+}
+
 void MainWindow::PlayIndex(int32 index)
 {
 	// 搜索是异步的，结果没回来前先记下，等 _FillResults 后再播
 	fPendingPlay = index;
+}
+
+void MainWindow::SelectTab(int32 tab)
+{
+	if (fSearchTabs == nullptr || tab < 0 || tab >= fSearchTabs->CountTabs())
+		return;
+
+	// BTabView::Select 内部会 Hide()/Show() 子视图，必须在窗口锁里调
+	if (!Lock())
+		return;
+	fSearchTabs->Select(tab);
+	_SwitchToTab(tab);
+	Unlock();
+}
+
+void MainWindow::ShowNowPlaying()
+{
+	if (!Lock())
+		return;
+	_ShowNowPlayingPage(true);
+	Unlock();
+}
+
+void MainWindow::ShowArtist(long long id, const char* name)
+{
+	auto* detail = new DetailWindow(BMessenger(this), true);
+	detail->LoadArtist(id, name);
+	detail->Show();
+}
+
+void MainWindow::ShowAlbum(long long id, const char* name)
+{
+	auto* detail = new DetailWindow(BMessenger(this), false);
+	detail->LoadAlbum(id, name);
+	detail->Show();
 }
 
 void MainWindow::SearchFor(const char* keyword)
@@ -381,38 +420,74 @@ void MainWindow::MessageReceived(BMessage* message)
 			return;
 		}
 
-		case kMessageSearchTab:
+		case kMessageGenericDone:
 		{
-			if (!fTabsReady)
-				return;
+			int32 slot = -1;
+			message->FindInt32("slot", &slot);
 
-			static const int32 kTypes[7] = {1, 1000, 10, 100, 1002, 1006,
-				1009};
-			const int32 tab = fSearchTabs->Selection();
-			fSearchType = kTypes[tab >= 0 && tab < 7 ? tab : 0];
-			_SwitchSearchCard();
+			const char* error = nullptr;
+			if (message->FindString("error", &error) == B_OK) {
+				fBusy = false;
+				fSearchButton->SetEnabled(true);
+				if (slot >= 0 && slot < kTabCount - 1)
+					fGenericLoading[slot] = false;
+				_Alert(Prefixed(B_TRANSLATE("搜索失败: "), error));
+				return;
+			}
+			if (slot < 0 || slot >= kTabCount - 1)
+				return;
+			fGenericLoading[slot] = false;
+
+			fLock.Lock();
+			std::vector<ncm::GenericItem> items = fGenericItems[slot];
+			fLock.Unlock();
+			fGenericReady[slot] = true;
+
+			// 只有在看的那个 tab 才刷新界面
+			BListView* list = fGenericLists[slot];
+			if (list != nullptr) {
+				list->MakeEmpty();
+				for (const ncm::GenericItem& item : items) {
+					BString label(item.name.c_str());
+					if (!item.subtitle.empty())
+						label << "  ·  " << item.subtitle.c_str();
+					list->AddItem(new BStringItem(label.String()));
+				}
+			}
 			return;
 		}
 
-		case kMessageGenericDone:
-			_FillGeneric();
-			return;
-
 		case kMessageGenericOpen:
 		{
-			const int32 index = fGenericList->CurrentSelection();
-			if (index < 0 || index >= static_cast<int32>(fGenericItems.size()))
+			const int32 slot = fTabIndex - 1;
+			if (slot < 0 || slot >= kTabCount - 1)
+				return;
+			BListView* list = fGenericLists[slot];
+			const int32 index = list != nullptr ? list->CurrentSelection() : -1;
+			if (index < 0
+				|| index >= static_cast<int32>(fGenericItems[slot].size()))
 				return;
 
-			const ncm::GenericItem item = fGenericItems[index];
-			if (fSearchType != 1000 && fSearchType != 10
-				&& fSearchType != 100) {
-				fStatus->SetText(B_TRANSLATE("该类目仅展示，双击歌单/专辑/歌手可加载歌曲"));
+			const ncm::GenericItem item = fGenericItems[slot][index];
+
+			// 歌手 / 专辑：开独立页面窗口
+			if (fSearchType == 100 || fSearchType == 10) {
+				auto* detail = new DetailWindow(BMessenger(this),
+					fSearchType == 100);
+				if (fSearchType == 100)
+					detail->LoadArtist(item.id, item.name.c_str());
+				else
+					detail->LoadAlbum(item.id, item.name.c_str());
+				detail->Show();
+				return;
+			}
+
+			if (fSearchType != 1000) {
+				_Alert(B_TRANSLATE("这个类目只做展示"));
 				return;
 			}
 
 			fBusy = true;
-			fStatus->SetText(B_TRANSLATE("加载中…"));
 			BMessage request(kMessageGenericOpen);
 			request.AddInt32("kind", fSearchType);
 			request.AddInt64("id", item.id);
@@ -430,8 +505,55 @@ void MainWindow::MessageReceived(BMessage* message)
 			return;
 		}
 
-		case 'nowp':
-			_OpenNowPlaying();
+		case kMessagePlaySongs:
+		{
+			// 歌手页/专辑页双击歌曲：把这批歌接过来当队列
+			void* source = nullptr;
+			int32 index = 0;
+			if (message->FindPointer("source", &source) != B_OK
+				|| source == nullptr)
+				return;
+			message->FindInt32("index", &index);
+
+			auto* window = static_cast<DetailWindow*>(source);
+			std::vector<ncm::Song> songs;
+			if (window->Lock()) {
+				songs = window->Songs();
+				window->Unlock();
+			}
+			if (songs.empty() || index < 0
+				|| index >= static_cast<int32>(songs.size()))
+				return;
+
+			fLock.Lock();
+			fSongs.swap(songs);
+			std::vector<ncm::Song> copy = fSongs;
+			fLock.Unlock();
+
+			// 主列表同步成这份队列，播放页/列表才是一致的
+			fResults->Clear();
+			for (const ncm::Song& song : copy)
+				fResults->AddRow(new SongRow(song));
+			fSongReady = true;
+
+			fSearchTabs->Select(0);
+			fTabIndex = 0;
+			fSearchType = kTabTypes[0];
+			if (fShowingNow)
+				_ShowNowPlayingPage(false);
+
+			_SyncPlaylist();
+			_StartCoverDownload();
+			_StartPlay(index);
+			return;
+		}
+
+		case kMessageToggleNowPlaying:
+			_ToggleNowPlaying();
+			return;
+
+		case kMessageNowPlayingClose:
+			_ShowNowPlayingPage(false);
 			return;
 
 		case kMessageNowPlayingReady:
@@ -447,18 +569,12 @@ void MainWindow::MessageReceived(BMessage* message)
 			message->FindString("lrc", &lrc);
 
 			BBitmap* mini = BTranslationUtils::GetBitmapFile(cover);
-			fNowBadge->SetInfo(title, artist ? artist : "", mini);
+			fNowBadge->SetInfo(title, artist != nullptr ? artist : "", mini);
 
-			if (fNowPlayingWindow != nullptr) {
-				BMessage forward(kMessageNowPlayingReady);
-				forward.AddString("title", title);
-				forward.AddString("artist", artist);
-				forward.AddString("cover", cover);
-				forward.AddString("lrc", lrc);
-				if (fNowPlayingWindow->Lock()) {
-					fNowPlayingWindow->PostMessage(&forward);
-					fNowPlayingWindow->Unlock();
-				}
+			if (fNowView != nullptr) {
+				fNowView->SetNowPlaying(title,
+					artist != nullptr ? artist : "",
+					cover != nullptr ? cover : "", lrc != nullptr ? lrc : "");
 			}
 			return;
 		}
@@ -467,13 +583,27 @@ void MainWindow::MessageReceived(BMessage* message)
 			fPlaylistWindow = nullptr;
 			return;
 
-		case kMessageNowPlayingClosed:
-			fNowPlayingWindow = nullptr;
-			return;
-
 		case kMessageSearchDone:
+		{
+			const char* error = nullptr;
+			if (message->FindString("error", &error) == B_OK) {
+				fBusy = false;
+				fSearchButton->SetEnabled(true);
+				_Alert(Prefixed(B_TRANSLATE("搜索失败: "), error));
+				return;
+			}
+
+			// 从歌单/专辑/歌手载入的结果，切回单曲页展示
+			bool fromDetail = false;
+			message->FindBool("fromDetail", &fromDetail);
+			if (fromDetail) {
+				fSearchTabs->Select(0);
+				fTabIndex = 0;
+				fSearchType = kTabTypes[0];
+			}
 			_FillResults();
 			return;
+		}
 
 		case kMessageCoversDone:
 			_ApplyCovers();
@@ -528,9 +658,11 @@ void MainWindow::MessageReceived(BMessage* message)
 
 		case kMessagePlayDone:
 		{
-			const char* text = nullptr;
-			if (message->FindString("text", &text) == B_OK)
-				fStatus->SetText(text);
+			// 先把索引定下来：流式播放那一路以前漏了这步，播放页/底栏一直拿不到曲目
+			int32 doneIndex = -1;
+			message->FindInt32("index", &doneIndex);
+			if (doneIndex >= 0)
+				fCurrentIndex = doneIndex;
 
 			BPositionIO* source = nullptr;
 			if (message->FindPointer("source", reinterpret_cast<void**>(&source)) == B_OK
@@ -538,7 +670,7 @@ void MainWindow::MessageReceived(BMessage* message)
 				std::string streamError;
 				std::string error;
 				if (!fPlayer->LoadStream(source, &streamError)) {
-					fStatus->SetText(Prefixed(B_TRANSLATE("解码失败: "), streamError));
+					_Alert(Prefixed(B_TRANSLATE("解码失败: "), streamError));
 				} else {
 					fSeek->SetEnabled(true);
 					if (fPlayer->Play(&error)) {
@@ -547,7 +679,7 @@ void MainWindow::MessageReceived(BMessage* message)
 						_StartNowPlayingThread();
 					} else {
 						fPlayButton->SetKind(TransportButton::kPlay);
-						fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
+						_Alert(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
 					}
 					_UpdateTransport();
 				}
@@ -555,51 +687,29 @@ void MainWindow::MessageReceived(BMessage* message)
 				return;
 			}
 
-			int32 doneIndex = -1;
-			message->FindInt32("index", &doneIndex);
-			if (doneIndex >= 0)
-				fCurrentIndex = doneIndex;
-
 			const char* path = nullptr;
 			if (message->FindString("path", &path) == B_OK) {
-
 				std::string error;
 				if (!fPlayer->Load(path, &error)) {
-					fStatus->SetText(Prefixed(B_TRANSLATE("解码失败: "), error));
+					_Alert(Prefixed(B_TRANSLATE("解码失败: "), error));
 				} else {
 					fSeek->SetEnabled(true);
 					if (fPlayer->Play(&error)) {
 						fPlayButton->SetKind(TransportButton::kPause);
-						_StartNowPlayingThread();
-
-						// fee=1 的歌服务器只给 30s 试听片段，提示一下
-						fLock.Lock();
-						const bool vipPreview =
-							static_cast<size_t>(fCurrentIndex) < fSongs.size()
-							&& fSongs[fCurrentIndex].fee == 1;
-						fLock.Unlock();
-						if (vipPreview) {
-							BString note(B_TRANSLATE("正在播放"));
-							note << B_TRANSLATE("（VIP 试听 30 秒）");
-							fStatus->SetText(note.String());
-						}
 						_SyncPlaylist();
+						_StartNowPlayingThread();
 					} else {
 						fPlayButton->SetKind(TransportButton::kPlay);
-						fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
+						_Alert(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
 					}
 					_UpdateTransport();
 				}
 			}
-			fBusy = false;
-			return;
-		}
 
-		case kMessageStatus:
-		{
 			const char* text = nullptr;
 			if (message->FindString("text", &text) == B_OK)
-				fStatus->SetText(text);
+				_Alert(text);
+			fBusy = false;
 			return;
 		}
 
@@ -612,12 +722,16 @@ void MainWindow::MessageReceived(BMessage* message)
 				* fPlayer->DurationSeconds();
 			std::string error;
 			if (!fPlayer->Seek(target, &error))
-				fStatus->SetText(Prefixed(B_TRANSLATE("定位失败: "), error));
+				_Alert(Prefixed(B_TRANSLATE("定位失败: "), error));
 			_UpdateTransport();
 			return;
 		}
 
 		case kMessageTick:
+		{
+			// tab 选中项靠轮询同步（beta6 的 BTabView 不给选择消息）
+			_SyncTab();
+
 			if (!fPlayer->IsPlaying())
 				return;
 
@@ -627,7 +741,7 @@ void MainWindow::MessageReceived(BMessage* message)
 					* fPlayer->DurationSeconds();
 				std::string seekError;
 				if (!fPlayer->Seek(target, &seekError))
-					fStatus->SetText(Prefixed(B_TRANSLATE("定位失败: "), seekError));
+					_Alert(Prefixed(B_TRANSLATE("定位失败: "), seekError));
 			}
 
 			if (fPlayer->IsFinished()) {
@@ -635,7 +749,8 @@ void MainWindow::MessageReceived(BMessage* message)
 				fPlayer->Stop();
 				fPlayButton->SetKind(TransportButton::kPlay);
 				fSeek->SetValue(1000);
-				fTimeLabel->SetText(BString(FormatTime(fPlayer->DurationSeconds()).c_str()));
+				fTimeLabel->SetText(BString(FormatTime(
+					fPlayer->DurationSeconds()).c_str()));
 
 				fLock.Lock();
 				const bool hasSongs = !fSongs.empty();
@@ -647,14 +762,11 @@ void MainWindow::MessageReceived(BMessage* message)
 
 			_UpdateTransport();
 			return;
+		}
 
 		case kMessageVolume:
 		{
-			const float gain = fVolume->Value() / 100.0f;
-			fPlayer->SetGain(gain);
-			BString label;
-			label << static_cast<int32>(fVolume->Value()) << "%";
-			fVolumeLabel->SetText(label.String());
+			fPlayer->SetGain(fVolume->Value() / 100.0f);
 			return;
 		}
 
@@ -701,9 +813,6 @@ void MainWindow::MessageReceived(BMessage* message)
 			}
 
 			_SyncPlaylist();
-			BString status(B_TRANSLATE("已加入下一首播放: "));
-			status << song.name.c_str();
-			fStatus->SetText(status.String());
 			return;
 		}
 
@@ -788,10 +897,6 @@ void MainWindow::MessageReceived(BMessage* message)
 				label << nickname;
 				fUserMenu->Superitem()->SetLabel(label.String());
 				fLogoutItem->SetEnabled(true);
-
-				BString status("已登录: ");
-				status << nickname;
-				fStatus->SetText(status.String());
 			}
 			return;
 		}
@@ -800,7 +905,7 @@ void MainWindow::MessageReceived(BMessage* message)
 			fApi->SetCookie(std::string());
 			remove(SessionPath().c_str());
 			fUserMenu->Superitem()->SetLabel(B_TRANSLATE("未登录"));
-			fStatus->SetText(B_TRANSLATE("已退出登录"));
+			fLogoutItem->SetEnabled(false);
 			return;
 
 		case kMessageAbout:
@@ -820,12 +925,6 @@ void MainWindow::MessageReceived(BMessage* message)
 	}
 }
 
-void MainWindow::FrameResized(float width, float height)
-{
-	BWindow::FrameResized(width, height);
-	_SwitchSearchCard();
-}
-
 bool MainWindow::QuitRequested()
 {
 	fQuitting = true;
@@ -838,36 +937,85 @@ void MainWindow::_StartSearch()
 		return;
 
 	const char* text = fSearchField->Text();
-	if (text == nullptr || text[0] == '\0') {
-		fStatus->SetText(B_TRANSLATE("先输入要搜的歌名"));
+	if (text == nullptr || text[0] == '\0')
 		return;
-	}
 
 	fKeyword = text;
-	fBusy = true;
-	fStatus->SetText(B_TRANSLATE("搜索中…"));
-	fSearchButton->SetEnabled(false);
+	// 关键字变了，之前各 tab 的缓存全部作废
+	_ClearGeneric();
 
-	// 类目映射：单曲/歌词走歌曲表，其余走通用列表
-	if (fSearchType == 1 || fSearchType == 1006) {
+	if (fTabIndex == 0) {
+		fBusy = true;
+		fSearchButton->SetEnabled(false);
 		thread_id thread = spawn_thread(_SearchThread, "ncm-search",
 			B_NORMAL_PRIORITY, this);
 		if (thread < B_OK) {
 			fBusy = false;
-			fStatus->SetText(B_TRANSLATE("无法创建搜索线程"));
+			fSearchButton->SetEnabled(true);
 			return;
 		}
 		resume_thread(thread);
-	} else {
-		thread_id thread = spawn_thread(_GenericSearchThread, "ncm-gen",
-			B_NORMAL_PRIORITY, this);
-		if (thread < B_OK) {
-			fBusy = false;
-			fStatus->SetText(B_TRANSLATE("无法创建搜索线程"));
-			return;
-		}
-		resume_thread(thread);
+		return;
 	}
+
+	// 类目搜索不占领 fBusy：通用列表慢慢拉也不该挡住放歌
+	_FetchGeneric(fTabIndex - 1);
+}
+
+void MainWindow::_ClearGeneric()
+{
+	for (int32 i = 0; i < kTabCount - 1; i++) {
+		fGenericReady[i] = false;
+		fLock.Lock();
+		fGenericItems[i].clear();
+		fLock.Unlock();
+		if (fGenericLists[i] != nullptr)
+			fGenericLists[i]->MakeEmpty();
+	}
+	fSongReady = false;
+}
+
+void MainWindow::_SyncTab()
+{
+	if (fSearchTabs == nullptr)
+		return;
+
+	const int32 selection = fSearchTabs->Selection();
+	if (selection >= 0 && selection < kTabCount && selection != fTabIndex)
+		_SwitchToTab(selection);
+}
+
+void MainWindow::_SwitchToTab(int32 tab)
+{
+	fTabIndex = tab;
+	fSearchType = kTabTypes[tab];
+	if (tab == 0)
+		return;
+
+	const int32 slot = tab - 1;
+	if (fGenericReady[slot])
+		return;
+
+	// 没缓存就按当前关键词补一次（不打断正在进行的搜索）
+	if (!fGenericLoading[slot] && fKeyword.Length() > 0)
+		_FetchGeneric(slot);
+}
+
+void MainWindow::_FetchGeneric(int32 slot)
+{
+	if (slot < 0 || slot >= kTabCount - 1 || fGenericLoading[slot])
+		return;
+
+	fGenericLoading[slot] = true;
+	auto* job = new GenericJob{this, slot, fKeyword};
+	thread_id thread = spawn_thread(_GenericSearchThread, "ncm-gen",
+		B_NORMAL_PRIORITY, job);
+	if (thread < B_OK) {
+		delete job;
+		fGenericLoading[slot] = false;
+		return;
+	}
+	resume_thread(thread);
 }
 
 int32 MainWindow::_SearchThread(void* data)
@@ -888,8 +1036,8 @@ int32 MainWindow::_SearchThread(void* data)
 		BMessage done(kMessageSearchDone);
 		self->_PostIfAlive(&done);
 	} else {
-		BMessage failure(kMessageStatus);
-		failure.AddString("text", Prefixed(B_TRANSLATE("搜索失败: "), error));
+		BMessage failure(kMessageSearchDone);
+		failure.AddString("error", error.c_str());
 		self->_PostIfAlive(&failure);
 	}
 	return 0;
@@ -897,6 +1045,7 @@ int32 MainWindow::_SearchThread(void* data)
 
 void MainWindow::_FillResults()
 {
+	// 上一次的关键词想用的结果已经过时，重新起播
 	fPlayer->Stop();
 	fResults->Clear();
 	fCurrentIndex = -1;
@@ -913,11 +1062,8 @@ void MainWindow::_FillResults()
 	fLock.Unlock();
 
 	fBusy = false;
+	fSongReady = true;
 	fSearchButton->SetEnabled(true);
-
-	BString status;
-	status << "找到 " << count << " 首（双击播放）";
-	fStatus->SetText(status.String());
 
 	_SyncPlaylist();
 	_StartCoverDownload();
@@ -966,27 +1112,27 @@ int32 MainWindow::_CoverThread(void* data)
 
 int32 MainWindow::_GenericSearchThread(void* data)
 {
-	auto* self = static_cast<MainWindow*>(data);
-	const BString keyword = self->fKeyword;
-	const int32 type = self->fSearchType;
+	auto* job = static_cast<GenericJob*>(data);
+	MainWindow* self = job->window;
+	const int32 slot = job->slot;
+	const BString keyword = job->keyword;
+	delete job;
 
 	std::vector<ncm::GenericItem> items;
 	std::string error;
-	const bool ok = self->fApi->SearchGeneric(type, keyword.String(), 30,
-		&items, &error);
+	const bool ok = self->fApi->SearchGeneric(kTabTypes[slot + 1],
+		keyword.String(), 30, &items, &error);
 
+	BMessage done(kMessageGenericDone);
+	done.AddInt32("slot", slot);
 	if (ok) {
 		self->fLock.Lock();
-		self->fGenericItems.swap(items);
+		self->fGenericItems[slot].swap(items);
 		self->fLock.Unlock();
-
-		BMessage done(kMessageGenericDone);
-		self->_PostIfAlive(&done);
 	} else {
-		BMessage failure(kMessageStatus);
-		failure.AddString("text", Prefixed(B_TRANSLATE("搜索失败: "), error));
-		self->_PostIfAlive(&failure);
+		done.AddString("error", error.c_str());
 	}
+	self->_PostIfAlive(&done);
 	return 0;
 }
 
@@ -1017,12 +1163,14 @@ int32 MainWindow::_DetailThread(void* data)
 		self->fSongs.swap(songs);
 		self->fLock.Unlock();
 
+		// 载入歌单/专辑/歌手后跳回单曲页展示
 		BMessage done(kMessageSearchDone);
-		done.AddString("title", request.FindString("name"));
+		done.AddBool("fromDetail", true);
 		self->_PostIfAlive(&done);
 	} else {
-		BMessage failure(kMessageStatus);
-		failure.AddString("text", Prefixed(B_TRANSLATE("加载失败: "), error));
+		BMessage failure(kMessageGenericDone);
+		failure.AddInt32("slot", -1);
+		failure.AddString("error", error.c_str());
 		self->_PostIfAlive(&failure);
 	}
 	return 0;
@@ -1043,16 +1191,14 @@ int32 MainWindow::_NowPlayingThread(void* data)
 	if (param != std::string::npos)
 		coverUrl.replace(param, 7, "512y512");
 
-	const std::string coverPath = self->fCacheDir + "/"
-		+ std::to_string(song.id) + "_big.jpg";
+	const std::string coverPath = BigCoverPath(song.id);
 	struct stat info;
 	if (stat(coverPath.c_str(), &info) != 0 || info.st_size < 4096)
 		self->fApi->DownloadCover(coverUrl, coverPath, &error);
 
 	std::string lrc;
 	self->fApi->FetchLyric(song.id, &lrc, &error);
-	const std::string lrcPath = self->fCacheDir + "/"
-		+ std::to_string(song.id) + ".lrc";
+	const std::string lrcPath = LyricPath(song.id);
 	FILE* file = fopen(lrcPath.c_str(), "w");
 	if (file != nullptr) {
 		fwrite(lrc.data(), 1, lrc.size(), file);
@@ -1080,7 +1226,7 @@ void MainWindow::_ApplyCovers()
 		BBitmap* bitmap = BTranslationUtils::GetBitmapFile(path.c_str());
 		if (bitmap != nullptr) {
 			row->SetCover(bitmap);
-				fResults->InvalidateRow(row);
+			fResults->InvalidateRow(row);
 		}
 	}
 }
@@ -1094,10 +1240,8 @@ void MainWindow::_StartPlay(int32 index)
 	const bool valid = index >= 0 && static_cast<size_t>(index) < fSongs.size();
 	fLock.Unlock();
 
-	if (!valid) {
-		fStatus->SetText(B_TRANSLATE("先在列表里选一首歌"));
+	if (!valid)
 		return;
-	}
 
 	{
 		fLock.Lock();
@@ -1116,7 +1260,6 @@ void MainWindow::_StartPlay(int32 index)
 		}
 	}
 	fBusy = true;
-	fStatus->SetText(B_TRANSLATE("正在获取播放地址…"));
 
 	auto* payload = new std::pair<MainWindow*, int32>(this, index);
 	thread_id thread = spawn_thread(_PlayThread, "ncm-play", B_NORMAL_PRIORITY,
@@ -1124,7 +1267,6 @@ void MainWindow::_StartPlay(int32 index)
 	if (thread < B_OK) {
 		delete payload;
 		fBusy = false;
-		fStatus->SetText(B_TRANSLATE("无法创建播放线程"));
 		return;
 	}
 	resume_thread(thread);
@@ -1140,7 +1282,7 @@ int32 MainWindow::_PlayThread(void* data)
 	self->fLock.Lock();
 	if (index < 0 || index >= static_cast<int32>(self->fSongs.size())) {
 		self->fLock.Unlock();
-		BMessage invalid(kMessageStatus);
+		BMessage invalid(kMessagePlayDone);
 		invalid.AddString("text", B_TRANSLATE("该歌曲已被移出队列"));
 		self->_PostIfAlive(&invalid);
 		return 0;
@@ -1153,7 +1295,7 @@ int32 MainWindow::_PlayThread(void* data)
 	ncm::AudioUrl audio;
 	std::string error;
 	if (!self->fApi->SongUrl(song.id, "standard", &audio, &error)) {
-		result.AddString("text", Prefixed(B_TRANSLATE("取流失败: "), error));
+		result.AddString("text", Prefixed(B_TRANSLATE("取流失败: "), error).String());
 		self->_PostIfAlive(&result);
 		return 0;
 	}
@@ -1172,6 +1314,7 @@ int32 MainWindow::_PlayThread(void* data)
 	// 流式优先：BMediaFile 直接吃 HTTP Range 数据源，边下边播
 	auto* source = new HttpRangeSource(audio.url, audio.size, &error);
 	if (source->Ok()) {
+		result.AddInt32("index", index);
 		result.AddPointer("source", source);
 		self->_PostIfAlive(&result);
 		return 0;
@@ -1180,7 +1323,7 @@ int32 MainWindow::_PlayThread(void* data)
 
 	// 回退：CDN 不支持 Range（少见）就整曲下载
 	if (!self->fApi->DownloadAudio(audio, path, &error)) {
-		result.AddString("text", Prefixed(B_TRANSLATE("下载失败: "), error));
+		result.AddString("text", Prefixed(B_TRANSLATE("下载失败: "), error).String());
 		self->_PostIfAlive(&result);
 		return 0;
 	}
@@ -1206,7 +1349,7 @@ void MainWindow::_TogglePlayback()
 	if (fPlayer->Play(&error))
 		fPlayButton->SetKind(TransportButton::kPause);
 	else
-		fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
+		_Alert(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
 }
 
 void MainWindow::_CyclePlayMode()
@@ -1227,10 +1370,8 @@ void MainWindow::_UpdateModeLabel()
 
 void MainWindow::_ToggleLike()
 {
-	if (fCurrentIndex < 0) {
-		fStatus->SetText(B_TRANSLATE("先播放一首歌"));
+	if (fCurrentIndex < 0)
 		return;
-	}
 
 	fLock.Lock();
 	const long long id = static_cast<size_t>(fCurrentIndex) < fSongs.size()
@@ -1243,7 +1384,7 @@ void MainWindow::_ToggleLike()
 	const bool target = !fLiked;
 	std::string error;
 	if (!fApi->LikeSong(id, target, &error)) {
-		fStatus->SetText(Prefixed(B_TRANSLATE("喜欢失败: "), error));
+		_Alert(Prefixed(B_TRANSLATE("喜欢失败: "), error));
 		return;
 	}
 
@@ -1251,8 +1392,6 @@ void MainWindow::_ToggleLike()
 	fHeartButton->SetKind(fLiked ? TransportButton::kHeartFilled
 								 : TransportButton::kHeart);
 	fHeartButton->Invalidate();
-	fStatus->SetText(fLiked ? B_TRANSLATE("已加入我喜欢的音乐")
-							: B_TRANSLATE("已从我喜欢的音乐移除"));
 }
 
 void MainWindow::_OpenPlaylist()
@@ -1268,66 +1407,33 @@ void MainWindow::_OpenPlaylist()
 	fPlaylistWindow->Activate();
 }
 
-void MainWindow::_SwitchSearchCard()
+void MainWindow::_ToggleNowPlaying()
 {
-	// 单曲/歌词显示歌曲表，其余显示通用列表；BCardLayout 负责 N 选 1
-	const bool songVisible = fSearchType == 1 || fSearchType == 1006;
-	BView* content = songVisible ? static_cast<BView*>(fResults)
-								 : static_cast<BView*>(fGenericList);
-	fContentHost->CardLayout()->SetVisibleItem(songVisible ? 0 : 1);
+	_ShowNowPlayingPage(!fShowingNow);
 }
 
-void MainWindow::_FillGeneric()
+void MainWindow::_ShowNowPlayingPage(bool show)
 {
-	fLock.Lock();
-	std::vector<ncm::GenericItem> items = fGenericItems;
-	fLock.Unlock();
+	fShowingNow = show;
+	fContentHost->CardLayout()->SetVisibleItem(show ? 1 : 0);
+	if (!show)
+		return;
 
-	fGenericList->MakeEmpty();
-	for (const ncm::GenericItem& item : items) {
-		BString label(item.name.c_str());
-		if (!item.subtitle.empty())
-			label << "  ·  " << item.subtitle.c_str();
-		fGenericList->AddItem(new BStringItem(label.String()));
-	}
-
-	fBusy = false;
-	fSearchButton->SetEnabled(true);
-	BString status;
-	status << "找到 " << items.size() << " 条（双击歌单/专辑/歌手加载歌曲）";
-	fStatus->SetText(status.String());
-}
-
-void MainWindow::_OpenNowPlaying()
-{
-	if (fNowPlayingWindow == nullptr)
-		fNowPlayingWindow = new NowPlayingWindow(BMessenger(this));
-	fNowPlayingWindow->Show();
-	fNowPlayingWindow->Activate();
-
-	// 把当前播放状态推过去（歌词/封面由 ready 消息或缓存文件补）
+	// 立刻把已有的封面/歌词推过去，剩下由 ready 消息补
 	fLock.Lock();
 	const bool valid = fCurrentIndex >= 0
 		&& static_cast<size_t>(fCurrentIndex) < fSongs.size();
 	const ncm::Song song = valid ? fSongs[fCurrentIndex] : ncm::Song();
 	fLock.Unlock();
 
-	if (valid) {
-		const std::string coverPath = CacheDir() + "/"
-			+ std::to_string(song.id) + "_big.jpg";
-		const std::string lrcPath = CacheDir() + "/"
-			+ std::to_string(song.id) + ".lrc";
-		BMessage ready(kMessageNowPlayingReady);
-		ready.AddString("title", song.name.c_str());
-		ready.AddString("artist", song.artist.c_str());
-		ready.AddString("cover", coverPath.c_str());
-		ready.AddString("lrc", lrcPath.c_str());
-		if (fNowPlayingWindow->Lock()) {
-			fNowPlayingWindow->PostMessage(&ready);
-			fNowPlayingWindow->Unlock();
-		}
-		_StartNowPlayingThread();
-	}
+	if (!valid)
+		return;
+
+	const std::string coverPath = BigCoverPath(song.id);
+	const std::string lrcPath = LyricPath(song.id);
+	fNowView->SetNowPlaying(song.name.c_str(), song.artist.c_str(),
+		coverPath.c_str(), lrcPath.c_str());
+	_StartNowPlayingThread();
 }
 
 void MainWindow::_StartNowPlayingThread()
@@ -1397,6 +1503,16 @@ void MainWindow::_UpdateTransport()
 	BString label(FormatTime(position).c_str());
 	label << " / " << FormatTime(duration).c_str();
 	fTimeLabel->SetText(label.String());
+
+	if (fShowingNow)
+		fNowView->SetPosition(position);
+}
+
+void MainWindow::_Alert(const BString& text)
+{
+	BAlert* alert = new BAlert(B_TRANSLATE("HaikuNCM"), text.String(),
+		B_TRANSLATE("好"), nullptr, nullptr, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+	alert->Go();
 }
 
 void MainWindow::_PostIfAlive(BMessage* message)

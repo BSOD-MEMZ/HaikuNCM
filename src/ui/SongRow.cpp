@@ -246,6 +246,20 @@ SongListView::SongListView()
 {
 }
 
+void AddSongColumns(SongListView* list)
+{
+	const float scale = be_plain_font->Size() / 12.0f;
+	list->AddColumn(new SongTitleColumn(B_TRANSLATE("标题"), 280 * scale,
+		160 * scale, 600 * scale), 0);
+	list->AddColumn(new SongAlbumColumn(B_TRANSLATE("专辑"), 180 * scale,
+		80 * scale, 500 * scale), 1);
+	list->AddColumn(new SongHeartColumn(B_TRANSLATE("喜欢"), 50 * scale,
+		40 * scale, 80 * scale), 2);
+	list->AddColumn(new SongDurationColumn(B_TRANSLATE("时长"), 70 * scale,
+		50 * scale, 120 * scale), 3);
+	list->SetSortingEnabled(true);
+}
+
 void SongListView::MouseDown(BPoint where)
 {
 	BColumnListView::MouseDown(where);

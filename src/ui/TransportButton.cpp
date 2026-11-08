@@ -51,6 +51,10 @@ TransportButton::TransportButton(const char* name, Kind kind,
 	if (fKind == kPlay)
 		fAltShape = _PauseShape(height);
 
+	// BControl 没有字形就没尺寸，布局会把按钮压成 0 宽，必须显式给
+	SetExplicitMinSize(BSize(34, 30));
+	SetExplicitMaxSize(BSize(34, 30));
+
 	if (tooltip != nullptr)
 		SetToolTip(tooltip);
 }

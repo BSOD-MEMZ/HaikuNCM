@@ -89,4 +89,7 @@ private:
 	void _ShowContextMenu(BPoint where);
 };
 
+// 标准四列（标题/专辑/喜欢/时长），主窗口和歌手·专辑页共用
+void AddSongColumns(SongListView* list);
+
 #endif

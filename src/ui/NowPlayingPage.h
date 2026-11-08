@@ -1,25 +1,22 @@
-#ifndef NCM_NOWPLAYING_WINDOW_H
-#define NCM_NOWPLAYING_WINDOW_H
+#ifndef NCM_NOWPLAYING_PAGE_H
+#define NCM_NOWPLAYING_PAGE_H
 
 #include <Bitmap.h>
 #include <Control.h>
-#include <Messenger.h>
-#include <View.h>
-#include <Window.h>
-
 #include <String.h>
+#include <View.h>
+
 #include <vector>
 
 class BStringView;
-class BScrollView;
+class CoverView;
 
 enum {
-	kMessageNowPlayingReady = 'nprd', // title/artist/coverPath/lrcPath
-	kMessageNowPlayingTick = 'nptk',  // position (double)
-	kMessageNowPlayingClosed = 'npcl',
+	kMessageNowPlayingReady = 'nprd', // title / artist / cover / lrc
+	kMessageNowPlayingClose = 'npcx', // 播放页的返回按钮
 };
 
-// LRC 歌词视图：解析 [mm:ss.xx] 行，当前位置行高亮并滚动
+// LRC 歌词视图：解析 [mm:ss.xx] 行，当前行居中高亮
 class LrcView : public BView {
 public:
 	LrcView();
@@ -37,10 +34,9 @@ private:
 	};
 	std::vector<Line> fLines;
 	int32 fCurrent = -1;
-	float fScrollOffset = 0.0f;
 };
 
-// 底部左侧徽章：小封面 + 曲名/歌手，点击打开播放页
+// 底部徽章：小封面 + 曲名/歌手，点击在列表/播放页之间切换
 class NowPlayingBadge : public BControl {
 public:
 	NowPlayingBadge();
@@ -59,27 +55,20 @@ private:
 	BBitmap* fCover = nullptr;
 };
 
-// 播放页窗口：大封面 + 曲目信息 + 滚动歌词（官方播放器同布局）
-class NowPlayingWindow : public BWindow {
+// 播放页：嵌在主窗口内容区（把歌曲列表换掉），底部播放控件始终保留
+class NowPlayingView : public BView {
 public:
-	explicit NowPlayingWindow(BMessenger target);
+	NowPlayingView();
 
 	void SetNowPlaying(const BString& title, const BString& artist,
 		const BString& coverPath, const BString& lrcPath);
 	void SetPosition(double seconds);
 
-	void MessageReceived(BMessage* message) override;
-	bool QuitRequested() override;
-
 private:
-	BMessenger fTarget;
-	LrcView* fLrc = nullptr;
-	BView* fCoverView = nullptr;
-	BBitmap* fCover = nullptr;
+	CoverView* fCover = nullptr;
 	BStringView* fTitle = nullptr;
 	BStringView* fArtist = nullptr;
-	BString fCoverPath;
-	BString fPendingLrc;
+	LrcView* fLrc = nullptr;
 };
 
 #endif

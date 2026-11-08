@@ -5,6 +5,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdio>
+#include <ctime>
 #include <functional>
 #include <map>
 
@@ -115,6 +117,39 @@ std::string PickString(const json& object, const char* first, const char* second
 	return std::string();
 }
 
+// 毫秒时间戳 -> YYYY-MM-DD（网易云专辑出版日期就这个格式最顺眼）
+std::string FormatDate(long long milliseconds)
+{
+	if (milliseconds <= 0)
+		return std::string();
+
+	time_t seconds = static_cast<time_t>(milliseconds / 1000);
+	struct tm broken;
+	if (localtime_r(&seconds, &broken) == nullptr)
+		return std::string();
+
+	char buffer[32];
+	snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d",
+		broken.tm_year + 1900, broken.tm_mon + 1, broken.tm_mday);
+	return buffer;
+}
+
+std::string JoinAlias(const json& object)
+{
+	if (!object.contains("alias") || !object["alias"].is_array())
+		return std::string();
+
+	std::string alias;
+	for (const json& name : object["alias"]) {
+		if (!name.is_string())
+			continue;
+		if (!alias.empty())
+			alias += " / ";
+		alias += name.get<std::string>();
+	}
+	return alias;
+}
+
 } // namespace
 
 namespace {
@@ -186,42 +221,105 @@ bool NeteaseApi::SearchGeneric(int type, const std::string& keyword,
 	}
 
 	items->clear();
-	if (!document.contains("result"))
+	if (!document.contains("result") || !document["result"].is_object())
 		return true;
 	const json& result = document["result"];
 
-	const char* listKeys[] = {"playlists", "albums", "artists", "users",
-		"djRadios", "songs"};
-	const char* subKeys[] = {"name", "name", "name", "nickname", "name",
-		"name"};
-	const char* subInfos[] = {"trackCount", "company", "alias", "signature",
-		"dj", "duration"};
+	// 老版搜索接口每类结果的键名都不一样，不能一张表套到底
+	const char* listKey = nullptr;
+	const char* nameKey = "name";
+	switch (type) {
+		case 1000:
+			listKey = "playlists";
+			break;
+		case 10:
+			listKey = "albums";
+			break;
+		case 100:
+			listKey = "artists";
+			break;
+		case 1002:
+			listKey = "userprofiles";
+			nameKey = "nickname";
+			break;
+		case 1009:
+			listKey = "djRadios";
+			break;
+		default:
+			listKey = "songs";
+			break;
+	}
 
-	for (size_t k = 0; k < 6; k++) {
-		if (!result.contains(listKeys[k])
-			|| !result[listKeys[k]].is_array())
-			continue;
+	if (listKey == nullptr || !result.contains(listKey)
+		|| !result[listKey].is_array())
+		return true;
 
-		for (const json& item : result[listKeys[k]]) {
-			GenericItem entry;
-			entry.id = item.value("id", 0LL);
-			entry.name = item.value(subKeys[k], "");
+	for (const json& item : result[listKey]) {
+		GenericItem entry;
+		entry.id = item.value("id", 0LL);
+		entry.name = item.value(nameKey, "");
 
-			const json& info = item.contains(subInfos[k])
-				? item[subInfos[k]] : json();
-			if (info.is_number())
-				entry.subtitle = std::to_string(info.get<long long>())
-					+ " 首";
-			else if (info.is_string())
-				entry.subtitle = info.get<std::string>();
-			else if (info.is_object())
-				entry.subtitle = info.value("name", "");
-			else if (item.contains("copywriter")
-				&& item["copywriter"].is_string())
-				entry.subtitle = item["copywriter"].get<std::string>();
-			items->push_back(entry);
+		switch (type) {
+			case 1000:
+			{
+				const long long tracks = item.value("trackCount", 0LL);
+				if (tracks > 0)
+					entry.subtitle = std::to_string(tracks) + " 首";
+				if (item.contains("creator") && item["creator"].is_object()) {
+					const std::string creator =
+						item["creator"].value("nickname", "");
+					if (!creator.empty()) {
+						if (!entry.subtitle.empty())
+							entry.subtitle += " · ";
+						entry.subtitle += creator;
+					}
+				}
+				break;
+			}
+			case 10:
+			{
+				if (item.contains("artist") && item["artist"].is_object())
+					entry.subtitle = item["artist"].value("name", "");
+				break;
+			}
+			case 100:
+			{
+				const long long albums = item.value("albumSize", 0LL);
+				if (albums > 0)
+					entry.subtitle = std::to_string(albums) + " 张专辑";
+				if (item.contains("alias") && item["alias"].is_array()
+					&& !item["alias"].empty()) {
+					std::string alias;
+					for (const json& name : item["alias"]) {
+						if (!name.is_string())
+							continue;
+						if (!alias.empty())
+							alias += "/";
+						alias += name.get<std::string>();
+					}
+					if (!alias.empty()) {
+						if (!entry.subtitle.empty())
+							entry.subtitle += " · ";
+						entry.subtitle += alias;
+					}
+				}
+				break;
+			}
+			case 1002:
+				entry.subtitle = item.value("signature", "");
+				break;
+			case 1009:
+			{
+				const long long programs = item.value("programCount", 0LL);
+				if (programs > 0)
+					entry.subtitle = std::to_string(programs) + " 期";
+				break;
+			}
+			default:
+				break;
 		}
-		break;
+
+		items->push_back(entry);
 	}
 
 	return true;
@@ -309,6 +407,165 @@ bool NeteaseApi::FetchArtistSongs(long long id, std::vector<Song>* songs,
 												 : json();
 		},
 		songs, error);
+}
+
+bool NeteaseApi::FetchArtist(long long id, ArtistInfo* info,
+	std::vector<Song>* hotSongs, std::string* error)
+{
+	const Response response = HttpGet("https://music.163.com/api/v1/artist/"
+		+ std::to_string(id), BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON parse failed: ") + exception.what();
+		return false;
+	}
+
+	if (!document.contains("code") || document["code"].get<int>() != 200) {
+		if (error != nullptr)
+			*error = "API code " + document.value("code", -1);
+		return false;
+	}
+
+	if (info != nullptr) {
+		info->id = id;
+		if (document.contains("artist") && document["artist"].is_object()) {
+			const json& artist = document["artist"];
+			info->name = artist.value("name", "");
+			info->briefDesc = artist.value("briefDesc", "");
+			info->alias = JoinAlias(artist);
+			info->avatarUrl = artist.value("picUrl", "");
+			info->albumCount = artist.value("albumSize", 0);
+			info->songCount = artist.value("musicSize", 0);
+		}
+	}
+
+	if (hotSongs != nullptr) {
+		hotSongs->clear();
+		if (document.contains("hotSongs") && document["hotSongs"].is_array()) {
+			for (const json& item : document["hotSongs"]) {
+				Song song;
+				ParseSongItem(item, &song);
+				if (song.id != 0)
+					hotSongs->push_back(song);
+			}
+		}
+	}
+	return true;
+}
+
+bool NeteaseApi::FetchArtistAlbums(long long id,
+	std::vector<AlbumInfo>* albums, std::string* error)
+{
+	const Response response = HttpGet(
+		"https://music.163.com/api/artist/albums/" + std::to_string(id)
+			+ "?limit=100&offset=0", BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON parse failed: ") + exception.what();
+		return false;
+	}
+
+	if (!document.contains("code") || document["code"].get<int>() != 200) {
+		if (error != nullptr)
+			*error = "API code " + document.value("code", -1);
+		return false;
+	}
+
+	albums->clear();
+	if (!document.contains("hotAlbums") || !document["hotAlbums"].is_array())
+		return true;
+
+	for (const json& item : document["hotAlbums"]) {
+		AlbumInfo album;
+		album.id = item.value("id", 0LL);
+		album.name = item.value("name", "");
+		album.coverUrl = item.value("picUrl", "");
+		album.publishTime = FormatDate(item.value("publishTime", 0LL));
+		album.songCount = item.value("size", 0);
+		if (item.contains("artist") && item["artist"].is_object())
+			album.artist = item["artist"].value("name", "");
+		albums->push_back(album);
+	}
+	return true;
+}
+
+bool NeteaseApi::FetchAlbumDetail(long long id, AlbumInfo* info,
+	std::vector<Song>* songs, std::string* error)
+{
+	const Response response = HttpGet(
+		"https://music.163.com/api/v1/album/" + std::to_string(id),
+		BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON parse failed: ") + exception.what();
+		return false;
+	}
+
+	if (!document.contains("code") || document["code"].get<int>() != 200) {
+		if (error != nullptr)
+			*error = "API code " + document.value("code", -1);
+		return false;
+	}
+
+	if (info != nullptr) {
+		info->id = id;
+		if (document.contains("album") && document["album"].is_object()) {
+			const json& album = document["album"];
+			info->name = album.value("name", "");
+			info->description = album.value("description", "");
+			info->coverUrl = album.value("picUrl", "");
+			info->publishTime = FormatDate(album.value("publishTime", 0LL));
+			info->songCount = album.value("size", 0);
+			if (album.contains("artist") && album["artist"].is_object())
+				info->artist = album["artist"].value("name", "");
+		}
+	}
+
+	if (songs != nullptr) {
+		songs->clear();
+		if (document.contains("songs") && document["songs"].is_array()) {
+			for (const json& item : document["songs"]) {
+				Song song;
+				ParseSongItem(item, &song);
+				if (song.id != 0)
+					songs->push_back(song);
+			}
+		}
+	}
+	return true;
 }
 
 bool NeteaseApi::FetchLyric(long long id, std::string* lrc,

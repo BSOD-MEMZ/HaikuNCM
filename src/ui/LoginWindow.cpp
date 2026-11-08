@@ -6,6 +6,7 @@
 
 #include <qrcodegen/qrcodegen.hpp>
 
+#include <Alert.h>
 #include <Button.h>
 #include <LayoutBuilder.h>
 #include <ScrollView.h>
@@ -117,35 +118,37 @@ void QrView::Draw(BRect)
 // ------------------------------------------------------------ LoginWindow
 
 LoginWindow::LoginWindow(BMessenger target)
-	: BWindow(BRect(0, 0, 380, 400), B_TRANSLATE("登录网易云音乐"),
+	: BWindow(BRect(0, 0, 360, 380), B_TRANSLATE("登录网易云音乐"),
 		  B_TITLED_WINDOW,
 		  B_NOT_RESIZABLE | B_NOT_ZOOMABLE | B_AUTO_UPDATE_SIZE_LIMITS)
 	, fTarget(target)
 {
 	auto* tabs = new BTabView("tabs", B_WIDTH_FROM_LABEL);
 
-	BTab* smsTab = new BTab();
-	tabs->AddTab(_BuildSmsTab(), smsTab);
-	smsTab->SetLabel(B_TRANSLATE("手机验证码"));
-
+	// 扫码放第一个：现在风控下它最靠谱，窗口一开就直接出码
 	BTab* qrTab = new BTab();
 	tabs->AddTab(_BuildQrTab(), qrTab);
 	qrTab->SetLabel(B_TRANSLATE("扫码"));
+
+	BTab* smsTab = new BTab();
+	tabs->AddTab(_BuildSmsTab(), smsTab);
+	smsTab->SetLabel(B_TRANSLATE("手机验证码"));
 
 	BTab* passwordTab = new BTab();
 	tabs->AddTab(_BuildPasswordTab(), passwordTab);
 	passwordTab->SetLabel(B_TRANSLATE("密码"));
 
-	fStatus = new BStringView("status",
-		B_TRANSLATE("验证码登录最稳，账密容易被风控"));
+	tabs->Select(0);
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, B_USE_DEFAULT_SPACING)
 		.SetInsets(B_USE_WINDOW_INSETS)
 		.Add(tabs)
-		.Add(fStatus)
 		.End();
 
 	CenterOnScreen();
+
+	// 窗口还没 Show 也能收消息，加载完成后自动取码
+	PostMessage(kMessageQrStart);
 }
 
 LoginWindow::~LoginWindow()
@@ -252,8 +255,18 @@ BView* LoginWindow::_BuildPasswordTab()
 
 void LoginWindow::_SetStatus(const char* text)
 {
-	if (fStatus != nullptr && text != nullptr)
-		fStatus->SetText(text);
+	if (fQrStatus != nullptr && text != nullptr)
+		fQrStatus->SetText(text);
+}
+
+void LoginWindow::_Fail(const char* text)
+{
+	if (text == nullptr)
+		return;
+	BAlert* alert = new BAlert(B_TRANSLATE("登录网易云音乐"), text,
+		B_TRANSLATE("好"), nullptr, nullptr, B_WIDTH_AS_USUAL,
+		B_WARNING_ALERT);
+	alert->Go();
 }
 
 void LoginWindow::MessageReceived(BMessage* message)
@@ -313,7 +326,7 @@ void LoginWindow::MessageReceived(BMessage* message)
 		{
 			const char* text = nullptr;
 			if (message->FindString("text", &text) == B_OK)
-				_SetStatus(text);
+				_Fail(text);
 			fBusy = false;
 			fQrRunning = false;
 			return;
@@ -576,12 +589,14 @@ int32 LoginWindow::_QrThread(void* data)
 		}
 
 		if (code == 800) {
-			BMessage expired(kMessageFail);
-			expired.AddString("text", B_TRANSLATE("二维码已过期，请刷新"));
+			BMessage expired(kMessageQrState);
+			expired.AddString("text",
+				B_TRANSLATE("二维码已过期，点刷新二维码重新获取"));
 			if (window->Lock()) {
 				window->PostMessage(&expired);
 				window->Unlock();
 			}
+			window->fQrRunning = false;
 			return 0;
 		}
 
