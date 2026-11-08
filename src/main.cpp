@@ -23,6 +23,11 @@ public:
 		fShowLogin = show;
 	}
 
+	void SetShowPlaylist(bool show)
+	{
+		fShowPlaylist = show;
+	}
+
 	void SetPlayAfterSearch(int32 index)
 	{
 		fPlayAfterSearch = index;
@@ -41,12 +46,15 @@ public:
 
 		if (fShowLogin)
 			window->PostMessage('logn');
+		if (fShowPlaylist)
+			window->PostMessage('plst');
 	}
 
 private:
 	const char* fInitialSearch = nullptr;
 	int32 fPlayAfterSearch = -1;
 	bool fShowLogin = false;
+	bool fShowPlaylist = false;
 };
 
 } // namespace
@@ -59,6 +67,8 @@ int main(int argc, char** argv)
 			application.SetInitialSearch(argv[++i]);
 		else if (strcmp(argv[i], "--play") == 0 && i + 1 < argc)
 			application.SetPlayAfterSearch(atoi(argv[++i]));
+		else if (strcmp(argv[i], "--playlist") == 0)
+			application.SetShowPlaylist(true);
 		else if (strcmp(argv[i], "--login") == 0)
 			application.SetShowLogin(true);
 	}

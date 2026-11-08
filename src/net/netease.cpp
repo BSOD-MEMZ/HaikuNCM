@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <map>
 
 namespace ncm {
@@ -115,6 +116,234 @@ std::string PickString(const json& object, const char* first, const char* second
 }
 
 } // namespace
+
+namespace {
+
+void ParseSongItem(const json& item, Song* song)
+{
+	song->id = item.value("id", 0LL);
+	song->name = PickString(item, "name", nullptr);
+	song->fee = item.value("fee", -1);
+	song->durationMs = item.contains("dt") ? item.value("dt", 0LL)
+											: item.value("duration", 0LL);
+
+	const char* artistsKey = item.contains("ar") ? "ar" : "artists";
+	if (item.contains(artistsKey) && item[artistsKey].is_array()
+		&& !item[artistsKey].empty()) {
+		const json& first = item[artistsKey][0];
+		song->artist = first.value("name", "");
+		for (size_t i = 1; i < item[artistsKey].size(); i++) {
+			song->artist += "/";
+			song->artist += item[artistsKey][i].value("name", "");
+		}
+	}
+
+	const char* albumKey = item.contains("al") ? "al" : "album";
+	if (item.contains(albumKey) && item[albumKey].is_object()) {
+		song->album = item[albumKey].value("name", "");
+		song->coverUrl = item[albumKey].value("picUrl", "");
+	}
+}
+
+} // namespace
+
+bool NeteaseApi::SearchGeneric(int type, const std::string& keyword,
+	int limit, std::vector<GenericItem>* items, std::string* error)
+{
+	json payload = {
+		{"s", keyword},
+		{"type", type},
+		{"limit", limit},
+		{"offset", 0},
+	};
+
+	const WeapiForm form = Weapi(payload.dump());
+	const std::string body = "params=" + UrlEncode(form.params)
+		+ "&encSecKey=" + UrlEncode(form.encSecKey);
+
+	const Response response = PostForm(kSearchUrl, body, BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON parse failed: ") + exception.what();
+		return false;
+	}
+
+	if (!document.contains("code") || document["code"].get<int>() != 200) {
+		if (error != nullptr)
+			*error = "API code " + document.value("code", -1);
+		return false;
+	}
+
+	items->clear();
+	if (!document.contains("result"))
+		return true;
+	const json& result = document["result"];
+
+	const char* listKeys[] = {"playlists", "albums", "artists", "users",
+		"djRadios", "songs"};
+	const char* subKeys[] = {"name", "name", "name", "nickname", "name",
+		"name"};
+	const char* subInfos[] = {"trackCount", "company", "alias", "signature",
+		"dj", "duration"};
+
+	for (size_t k = 0; k < 6; k++) {
+		if (!result.contains(listKeys[k])
+			|| !result[listKeys[k]].is_array())
+			continue;
+
+		for (const json& item : result[listKeys[k]]) {
+			GenericItem entry;
+			entry.id = item.value("id", 0LL);
+			entry.name = item.value(subKeys[k], "");
+
+			const json& info = item.contains(subInfos[k])
+				? item[subInfos[k]] : json();
+			if (info.is_number())
+				entry.subtitle = std::to_string(info.get<long long>())
+					+ " 首";
+			else if (info.is_string())
+				entry.subtitle = info.get<std::string>();
+			else if (info.is_object())
+				entry.subtitle = info.value("name", "");
+			else if (item.contains("copywriter")
+				&& item["copywriter"].is_string())
+				entry.subtitle = item["copywriter"].get<std::string>();
+			items->push_back(entry);
+		}
+		break;
+	}
+
+	return true;
+}
+
+namespace {
+
+bool FetchSongListJson(const std::string& url,
+	const std::function<bool(const json&)>& unwrap,
+	std::vector<Song>* songs, std::string* error)
+{
+	const Response response = HttpGet(url, BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON parse failed: ") + exception.what();
+		return false;
+	}
+
+	if (!document.contains("code") || document["code"].get<int>() != 200) {
+		if (error != nullptr)
+			*error = "API code " + document.value("code", -1);
+		return false;
+	}
+
+	songs->clear();
+	const json list = unwrap(document);
+	if (!list.is_array())
+		return true;
+
+	for (const json& item : list) {
+		Song song;
+		ParseSongItem(item, &song);
+		if (song.id != 0)
+			songs->push_back(song);
+	}
+	return true;
+}
+
+} // namespace
+
+bool NeteaseApi::FetchPlaylistSongs(long long id, std::vector<Song>* songs,
+	std::string* error)
+{
+	return FetchSongListJson(
+		"https://music.163.com/api/v6/playlist/detail?id="
+			+ std::to_string(id) + "&n=500",
+		[](const json& document) {
+			if (document.contains("playlist")
+				&& document["playlist"].contains("tracks"))
+				return document["playlist"]["tracks"];
+			return json();
+		},
+		songs, error);
+}
+
+bool NeteaseApi::FetchAlbumSongs(long long id, std::vector<Song>* songs,
+	std::string* error)
+{
+	return FetchSongListJson(
+		"https://music.163.com/api/v1/album/" + std::to_string(id),
+		[](const json& document) {
+			return document.contains("songs") ? document["songs"] : json();
+		},
+		songs, error);
+}
+
+bool NeteaseApi::FetchArtistSongs(long long id, std::vector<Song>* songs,
+	std::string* error)
+{
+	return FetchSongListJson(
+		"https://music.163.com/api/v1/artist/" + std::to_string(id),
+		[](const json& document) {
+			return document.contains("hotSongs") ? document["hotSongs"]
+												 : json();
+		},
+		songs, error);
+}
+
+bool NeteaseApi::FetchLyric(long long id, std::string* lrc,
+	std::string* error)
+{
+	const Response response = HttpGet(
+		"https://music.163.com/api/song/lyric?id=" + std::to_string(id)
+			+ "&lv=1&kv=1&tv=-1",
+		BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON parse failed: ") + exception.what();
+		return false;
+	}
+
+	if (document.contains("lrc") && document["lrc"].is_object()) {
+		*lrc = document["lrc"].value("lyric", "");
+		return !lrc->empty();
+	}
+
+	if (error != nullptr)
+		*error = "没有歌词";
+	return false;
+}
 
 bool NeteaseApi::Login(const std::string& phone, const std::string& password,
 	std::string* nickname, std::string* cookie, std::string* error)

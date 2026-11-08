@@ -72,6 +72,45 @@ std::string UrlEncode(const std::string& value)
 	return result;
 }
 
+Response HttpGet(const std::string& url,
+	const std::vector<std::string>& headers)
+{
+	CURL* handle = curl_easy_init();
+	if (handle == nullptr) {
+		Response response;
+		response.error = "curl 初始化失败";
+		return response;
+	}
+
+	Response response;
+	struct curl_slist* headerList = nullptr;
+	for (const std::string& header : headers)
+		headerList = curl_slist_append(headerList, header.c_str());
+
+	curl_easy_setopt(handle, CURLOPT_URL, url.c_str());
+	curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headerList);
+	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, WriteToString);
+	curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response.body);
+	curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, CollectHeader);
+	curl_easy_setopt(handle, CURLOPT_HEADERDATA, &response.headers);
+	curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 0L);
+	curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 15L);
+	curl_easy_setopt(handle, CURLOPT_USERAGENT,
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+
+	const CURLcode code = curl_easy_perform(handle);
+	curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response.status);
+	if (headerList != nullptr)
+		curl_slist_free_all(headerList);
+	curl_easy_cleanup(handle);
+
+	if (code != CURLE_OK)
+		response.error = curl_easy_strerror(code);
+	return response;
+}
+
 Response PostForm(const std::string& url, const std::string& body,
 	const std::vector<std::string>& headers)
 {

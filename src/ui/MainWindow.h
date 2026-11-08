@@ -5,6 +5,7 @@
 #include <String.h>
 #include <Window.h>
 
+#include <string>
 #include <vector>
 
 #include "net/netease.h"
@@ -20,7 +21,10 @@ class SeekSlider;
 class BStringView;
 class BTextControl;
 class PlaylistWindow;
+class NowPlayingBadge;
+class NowPlayingWindow;
 class SongListView;
+class BTabView;
 class SongHeader;
 class BMenu;
 class TransportButton;
@@ -52,6 +56,11 @@ enum {
 	kMessageLike = 'like',
 	kMessagePlaylist = 'plst',
 	kMessagePlayIndex = 'plix',
+	kMessageSearchTab = 'stab',
+	kMessageGenericOpen = 'gnop',
+	kMessageGenericDone = 'gdon',
+	kMessagePlaylistClosed = 'plcl',
+	kMessageDetailReady = 'dtrd',
 	kMessageUserMenu = 'usrr',
 	kMessageShowLogin = 'shlg',
 	kMessageDoLogout = 'dlgo',
@@ -82,12 +91,22 @@ private:
 	void _ToggleLike();
 	void _OpenPlaylist();
 	void _SyncPlaylist();
+	void _SwitchSearchCard();
+	void _FillGeneric();
+	void _OpenNowPlaying();
+	void _StartNowPlayingThread();
 	int32 _IndexOfSong(long long id);
 	void _UpdateModeLabel();
 
 	static int32 _SearchThread(void* data);
 	static int32 _PlayThread(void* data);
 	static int32 _CoverThread(void* data);
+	static int32 _GenericSearchThread(void* data);
+	static int32 _DetailThread(void* data);
+	static int32 _NowPlayingThread(void* data);
+
+	BView* fCards[7] = {nullptr, nullptr, nullptr, nullptr, nullptr,
+		nullptr, nullptr};
 
 	BMenuBar* fMenuBar = nullptr;
 	BMenuBar* fUserMenuBar = nullptr;
@@ -98,6 +117,15 @@ private:
 	BTextControl* fSearchField = nullptr;
 	BButton* fSearchButton = nullptr;
 	SongListView* fResults = nullptr;
+	BTabView* fSearchTabs = nullptr;
+	BView* fSongCard = nullptr;
+	BListView* fGenericList = nullptr;
+	std::vector<ncm::GenericItem> fGenericItems;
+	int32 fSearchType = 1;
+	std::string fCacheDir;
+
+	NowPlayingBadge* fNowBadge = nullptr;
+	NowPlayingWindow* fNowPlayingWindow = nullptr;
 
 	TransportButton* fPrevButton = nullptr;
 	TransportButton* fPlayButton = nullptr;

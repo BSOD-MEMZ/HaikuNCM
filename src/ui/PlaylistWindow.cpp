@@ -299,5 +299,7 @@ void PlaylistWindow::MessageReceived(BMessage* message)
 
 bool PlaylistWindow::QuitRequested()
 {
+	BMessage closed(kMessagePlaylistClosed);
+	fTarget.SendMessage(&closed);
 	return true;
 }

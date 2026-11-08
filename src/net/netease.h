@@ -16,6 +16,12 @@ struct Song {
 	int fee = -1; // 0: free, 1: VIP (30s trial when anonymous), 8: free low quality
 };
 
+struct GenericItem {
+	long long id = 0;
+	std::string name;
+	std::string subtitle;
+};
+
 struct AudioUrl {
 	std::string url;
 	std::string type;
@@ -29,6 +35,19 @@ public:
 	bool Login(const std::string& phone, const std::string& password,
 		std::string* nickname, std::string* cookie, std::string* error);
 	bool LikeSong(long long id, bool like, std::string* error);
+
+	// 聚合搜索：type 1 单曲 / 1000 歌单 / 10 专辑 / 100 歌手 / 1002 用户
+	// / 1006 歌词 / 1009 声音
+	bool SearchGeneric(int type, const std::string& keyword, int limit,
+		std::vector<GenericItem>* items, std::string* error);
+
+	bool FetchPlaylistSongs(long long id, std::vector<Song>* songs,
+		std::string* error);
+	bool FetchAlbumSongs(long long id, std::vector<Song>* songs,
+		std::string* error);
+	bool FetchArtistSongs(long long id, std::vector<Song>* songs,
+		std::string* error);
+	bool FetchLyric(long long id, std::string* lrc, std::string* error);
 
 	// 短信验证码登录（网易云风控下比账密可靠）
 	bool SendSmsCaptcha(const std::string& phone, std::string* error);

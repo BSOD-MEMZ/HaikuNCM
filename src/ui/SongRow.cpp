@@ -183,6 +183,7 @@ void SongHeartColumn::DrawField(BField* _field, BRect rect, BView* parent)
 	SongField* field = static_cast<SongField*>(_field);
 
 	// 点赞状态需要登录接口，登录前统一空心灰
+	(void)field;
 	parent->SetHighColor(tint_color(ui_color(B_LIST_ITEM_TEXT_COLOR),
 		B_LIGHTEN_1_TINT));
 	font_height fh;

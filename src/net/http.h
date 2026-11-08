@@ -23,6 +23,9 @@ void HttpInit();
 
 std::string UrlEncode(const std::string& value);
 
+Response HttpGet(const std::string& url,
+	const std::vector<std::string>& headers);
+
 Response PostForm(const std::string& url, const std::string& body,
 	const std::vector<std::string>& headers);
 
