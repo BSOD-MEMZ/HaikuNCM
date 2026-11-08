@@ -20,6 +20,7 @@ public:
 
 	bool IsLoaded() const;
 	bool IsPlaying() const;
+	bool IsFinished() const;
 	std::string Description() const;
 
 	void SetGain(float gain);
@@ -30,6 +31,8 @@ public:
 	bool Seek(double seconds, std::string* error);
 
 private:
+	bool _StartOutput(std::string* error);
+
 	struct Impl;
 	Impl* fImpl;
 };

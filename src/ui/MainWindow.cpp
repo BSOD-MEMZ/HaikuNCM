@@ -409,8 +409,22 @@ void MainWindow::MessageReceived(BMessage* message)
 		}
 
 		case kMessageTick:
-			if (fPlayer->IsPlaying())
-				_UpdateTransport();
+			if (!fPlayer->IsPlaying())
+				return;
+
+			if (fPlayer->IsFinished()) {
+				// 到曲末：停输出、复位按钮，再按模式决定要不要接下一首
+				fPlayer->Stop();
+				fPlayButton->SetKind(TransportButton::kPlay);
+				fSeek->SetValue(1000);
+				fTimeLabel->SetText(BString(FormatTime(fPlayer->DurationSeconds()).c_str()));
+
+				if (fPlayMode != 1 && fResults->CountItems() > 0)
+					PostMessage(kMessageNext);
+				return;
+			}
+
+			_UpdateTransport();
 			return;
 
 		case kMessageVolume:

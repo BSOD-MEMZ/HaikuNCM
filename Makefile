@@ -8,7 +8,7 @@ UI_SRC = $(wildcard src/ui/*.cpp src/audio/*.cpp)
 THIRD_SRC = third_party/qrcodegen/qrcodegen.cpp
 BUILD_DIR = build
 
-all: $(BUILD_DIR)/HaikuNCM $(BUILD_DIR)/ncmcli $(BUILD_DIR)/audiotest $(BUILD_DIR)/wavdump
+all: $(BUILD_DIR)/HaikuNCM $(BUILD_DIR)/ncmcli $(BUILD_DIR)/audiotest $(BUILD_DIR)/wavdump $(BUILD_DIR)/seektest
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -23,7 +23,10 @@ $(BUILD_DIR)/audiotest: tools/audiotest.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ tools/audiotest.cpp -lmedia -lbe -lroot
 
 $(BUILD_DIR)/wavdump: tools/wavdump.cpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) -o $@ tools/wavdump.cpp -lmedia -lbe -lroot
+	$(CXX) $(CXXFLAGS) -o $@ tools/wavdump.cpp -lmedia -lbe -ltranslation -lroot
+
+$(BUILD_DIR)/seektest: tools/seektest.cpp src/audio/Player.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ tools/seektest.cpp src/audio/Player.cpp -lmedia -lbe -lroot
 
 # 翻译：抽取 B_TRANSLATE 字符串，再链接成 Haiku 的二进制 catalog
 TRANSLATABLE = $(UI_SRC)

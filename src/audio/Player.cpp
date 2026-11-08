@@ -30,8 +30,12 @@ void Player::Impl::Render(void* cookie, void* buffer, size_t size,
 	const media_raw_audio_format& format)
 {
 	auto* self = static_cast<Impl*>(cookie);
-	if (self == nullptr || self->track == nullptr || self->finished)
+
+	// 播放结束/未加载：必须持续输出静音，否则旧缓冲会被反复播出（卡音 bug）
+	if (self == nullptr || self->track == nullptr || self->finished) {
+		memset(buffer, 0, size);
 		return;
+	}
 
 	int64 frames = static_cast<int64>(size
 		/ (sizeof(float) * format.channel_count));
@@ -126,19 +130,8 @@ bool Player::Load(const std::string& path, std::string* error)
 	return false;
 }
 
-bool Player::Play(std::string* error)
+bool Player::_StartOutput(std::string* error)
 {
-	if (!IsLoaded()) {
-		if (error != nullptr)
-			*error = "尚未载入音频";
-		return false;
-	}
-
-	Stop();
-
-	fImpl->finished = false;
-	fImpl->peak = 0.0f;
-
 	auto* output = new BSoundPlayer(&fImpl->format, "HaikuNCM",
 		Impl::Render, nullptr, fImpl);
 	const status_t status = output->InitCheck();
@@ -155,6 +148,21 @@ bool Player::Play(std::string* error)
 	output->Start();
 	output->SetHasData(true);
 	return true;
+}
+
+bool Player::Play(std::string* error)
+{
+	if (!IsLoaded()) {
+		if (error != nullptr)
+			*error = "尚未载入音频";
+		return false;
+	}
+
+	Stop();
+
+	fImpl->finished = false;
+	fImpl->peak = 0.0f;
+	return _StartOutput(error);
 }
 
 void Player::Stop()
@@ -191,6 +199,11 @@ bool Player::IsPlaying() const
 	return fImpl->output != nullptr;
 }
 
+bool Player::IsFinished() const
+{
+	return fImpl->finished;
+}
+
 double Player::DurationSeconds() const
 {
 	if (fImpl->track == nullptr)
@@ -213,16 +226,31 @@ bool Player::Seek(double seconds, std::string* error)
 		return false;
 	}
 
-	bigtime_t time = static_cast<bigtime_t>(seconds * 1000000.0);
-	fImpl->finished = false;
-	fImpl->framesRendered = 0;
+	const double duration = DurationSeconds();
+	if (duration > 0.0 && seconds > duration)
+		seconds = duration;
+	if (seconds < 0.0)
+		seconds = 0.0;
 
+	// BMediaTrack 不是线程安全的：必须先停输出，再动解码轨
+	const bool wasPlaying = fImpl->output != nullptr;
+	Stop();
+
+	bigtime_t time = static_cast<bigtime_t>(seconds * 1000000.0);
 	const status_t status = fImpl->track->SeekToTime(&time);
 	if (status != B_OK) {
 		if (error != nullptr)
 			*error = std::string("定位失败: ") + strerror(status);
 		return false;
 	}
+
+	// 进度计数对齐到定位点，而不是归零
+	if (fImpl->format.frame_rate > 0)
+		fImpl->framesRendered = static_cast<int64>(seconds * fImpl->format.frame_rate);
+	fImpl->finished = false;
+
+	if (wasPlaying)
+		return _StartOutput(error);
 	return true;
 }
 
