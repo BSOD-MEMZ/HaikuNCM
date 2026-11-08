@@ -1,12 +1,13 @@
 #ifndef NCM_TRANSPORT_BUTTON_H
 #define NCM_TRANSPORT_BUTTON_H
 
+#include <ControlLook.h>
 #include <Control.h>
-#include <String.h>
+#include <Shape.h>
 
-// MediaPlayer 的传输按钮是自绘的（它用编译进二进制的 HVIF 图标）。
-// 这里同样自绘，只是直接画矢量形状：不依赖图标资源，也不受 BButton::SetIcon
-// 在 beta6 上不显示的问题影响，颜色还能跟着系统主题走。
+// 对齐 Haiku MediaPlayer 的传输按钮（SymbolButton，MIT，Stephan Aßmus）：
+// 图标是 BShape 矢量路径，按钮底用 be_control_look 画原生斜面，
+// 字形用线性渐变（暗 -> 基色）填充，颜色跟随系统主题。
 class TransportButton : public BControl {
 public:
 	enum Kind {
@@ -19,19 +20,30 @@ public:
 	};
 
 	TransportButton(const char* name, Kind kind, const char* tooltip,
-		BMessage* message);
+		BMessage* message, uint32 borders = 0);
+	~TransportButton() override;
 
 	void SetKind(Kind kind);
 
 	void Draw(BRect updateRect) override;
 	void MouseDown(BPoint where) override;
-	void MouseMoved(BPoint where, uint32 transit, const BMessage* dragMessage) override;
-	void GetPreferredSize(float* width, float* height) override;
+	void MouseUp(BPoint where) override;
+	void MouseMoved(BPoint where, uint32 transit,
+		const BMessage* dragMessage) override;
 
 private:
-	void _DrawGlyph(BRect bounds, rgb_color color);
+	BShape* _SkipBackwardsShape(float height) const;
+	BShape* _SkipForwardShape(float height) const;
+	BShape* _PlayShape(float height) const;
+	BShape* _PauseShape(float height) const;
+	BShape* _HeartShape(float height) const;
+
+	void _DrawGlyph(BRect bounds, const rgb_color& base);
 
 	Kind fKind;
+	BShape* fShape = nullptr;
+	BShape* fAltShape = nullptr; // play/pause 双形态
+	uint32 fBorders;
 	bool fPressed = false;
 	bool fHover = false;
 };

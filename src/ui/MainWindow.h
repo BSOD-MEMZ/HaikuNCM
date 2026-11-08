@@ -16,6 +16,7 @@ class BMenuItem;
 class BMenuBar;
 class BMessageRunner;
 class BSlider;
+class SeekSlider;
 class BStringView;
 class BTextControl;
 class SongHeader;
@@ -92,7 +93,7 @@ private:
 	TransportButton* fPrevButton = nullptr;
 	TransportButton* fPlayButton = nullptr;
 	TransportButton* fNextButton = nullptr;
-	BSlider* fSeek = nullptr;
+	SeekSlider* fSeek = nullptr;
 	BStringView* fTimeLabel = nullptr;
 	BSlider* fVolume = nullptr;
 	BStringView* fVolumeLabel = nullptr;
@@ -106,7 +107,8 @@ private:
 	int32 fPlayMode = 0; // 0 顺序 1 单曲 2 随机
 	bool fLiked = false;
 	int32 fPendingPlay = -1;
-	bool fSeeking = false;
+	bool fSeekDirty = false;
+	int32 fSeekTarget = 0;
 
 	BLocker fLock;
 	std::vector<ncm::Song> fSongs;

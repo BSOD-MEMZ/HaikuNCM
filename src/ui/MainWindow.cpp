@@ -5,6 +5,7 @@
 #include "PlaylistWindow.h"
 #include "SongHeader.h"
 #include "SongItem.h"
+#include "SeekSlider.h"
 #include "TransportButton.h"
 #include "UserMenuItem.h"
 #include "audio/Player.h"
@@ -170,15 +171,18 @@ MainWindow::MainWindow()
 	fResults->SetInvocationMessage(new BMessage(kMessagePlay));
 	fResults->SetExplicitMinSize(BSize(560, 260));
 
+	const uint32 topBottom = BControlLook::B_TOP_BORDER
+		| BControlLook::B_BOTTOM_BORDER;
 	fPrevButton = new TransportButton("prev", TransportButton::kPrevious,
-		B_TRANSLATE("上一首"), new BMessage(kMessagePrev));
+		B_TRANSLATE("上一首"), new BMessage(kMessagePrev),
+		BControlLook::B_LEFT_BORDER | topBottom);
 	fPlayButton = new TransportButton("play", TransportButton::kPlay,
-		B_TRANSLATE("播放"), new BMessage(kMessagePlay));
+		B_TRANSLATE("播放"), new BMessage(kMessagePlay), topBottom);
 	fNextButton = new TransportButton("next", TransportButton::kNext,
-		B_TRANSLATE("下一首"), new BMessage(kMessageNext));
+		B_TRANSLATE("下一首"), new BMessage(kMessageNext),
+		BControlLook::B_RIGHT_BORDER | topBottom);
 
-	fSeek = new BSlider("seek", nullptr, new BMessage(kMessageSeek), 0, 1000,
-		B_HORIZONTAL);
+	fSeek = new SeekSlider("seek", new BMessage(kMessageSeek), 0, 1000);
 	fSeek->SetExplicitMinSize(BSize(160, B_SIZE_UNSET));
 	fSeek->SetEnabled(false);
 
@@ -215,9 +219,11 @@ MainWindow::MainWindow()
 			.Add(fHeader)
 			.Add(new BScrollView("scroll", fResults, 0, false, true))
 			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
-				.Add(fPrevButton)
-				.Add(fPlayButton)
-				.Add(fNextButton)
+				.AddGroup(B_HORIZONTAL, 0)
+					.Add(fPrevButton)
+					.Add(fPlayButton)
+					.Add(fNextButton)
+				.End()
 				.Add(fSeek, 1.0f)
 				.Add(fTimeLabel)
 				.Add(fHeartButton)
@@ -411,6 +417,15 @@ void MainWindow::MessageReceived(BMessage* message)
 		case kMessageTick:
 			if (!fPlayer->IsPlaying())
 				return;
+
+			if (fSeekDirty && !fSeek->IsTracking()) {
+				fSeekDirty = false;
+				const double target = fSeekTarget / 1000.0
+					* fPlayer->DurationSeconds();
+				std::string seekError;
+				if (!fPlayer->Seek(target, &seekError))
+					fStatus->SetText(Prefixed(B_TRANSLATE("定位失败: "), seekError));
+			}
 
 			if (fPlayer->IsFinished()) {
 				// 到曲末：停输出、复位按钮，再按模式决定要不要接下一首
@@ -824,7 +839,7 @@ void MainWindow::_UpdateTransport()
 	const double duration = fPlayer->DurationSeconds();
 	const double position = fPlayer->PositionSeconds();
 
-	if (!fSeeking) {
+	if (!fSeek->IsTracking()) {
 		const int32 value = duration > 0.0
 			? static_cast<int32>(position / duration * 1000.0)
 			: 0;

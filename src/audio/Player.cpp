@@ -92,6 +92,11 @@ bool Player::Load(const std::string& path, std::string* error)
 		return false;
 	}
 
+	// 换歌必须把渲染计数清零，否则时间会从上一首累计
+	fImpl->framesRendered = 0;
+	fImpl->finished = false;
+	fImpl->peak = 0.0f;
+
 	fImpl->file = new BMediaFile(&ref);
 	if (fImpl->file->InitCheck() != B_OK) {
 		if (error != nullptr)
