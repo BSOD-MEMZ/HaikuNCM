@@ -15,6 +15,7 @@ class SongListView;
 
 enum {
 	kMessageDetailPlay = 'dtpl',   // 双击歌曲：source + index
+	kMessageDetailClosed = 'dtcl', // 子窗口被用户关掉（隐藏了，等主窗口回收）
 	kMessageDetailReady = 'dtrd',  // 头部信息 + 歌曲都到了
 	kMessageDetailAlbums = 'dtal', // 歌手页的专辑列表到了
 	kMessageDetailAlbumOpen = 'dtao', // 在歌手页双击专辑
@@ -36,6 +37,7 @@ public:
 	DetailWindow(BMessenger target, int kind);
 
 	void LoadArtist(long long id, const char* name);
+	void LoadAlbumAt(long long id) { LoadAlbum(id, ""); }
 	void LoadAlbum(long long id, const char* name);
 	void LoadPlaylist(long long id, const char* name);
 
@@ -44,6 +46,7 @@ public:
 
 	void MessageReceived(BMessage* message) override;
 	bool QuitRequested() override;
+	void Quit() override;
 
 private:
 	void _FillSongs();
@@ -55,7 +58,6 @@ private:
 
 	BMessenger fTarget;
 	int fKind;
-	bool fLoaded = false;
 
 	CoverView* fImage = nullptr;
 	BStringView* fTitle = nullptr;

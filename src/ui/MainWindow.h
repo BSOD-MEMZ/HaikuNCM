@@ -24,8 +24,10 @@ class BTextControl;
 class BView;
 class AvatarGridView;
 class BCardView;
+class GenericListView;
 class BView;
 class CommentsWindow;
+class DetailWindow;
 class PlaylistWindow;
 class NowPlayingBadge;
 class NowPlayingView;
@@ -113,6 +115,7 @@ private:
 	void _PushNowPlaying(const ncm::Song& song);
 	void _ApplyTheme(rgb_color color);
 	void _SyncHeartButton();
+	void _RecycleDetailWindow(void* window);
 	void _StartNowPlayingThread();
 	void _Alert(const BString& text);
 	void _BuildQualityMenu(BMenu* parent);
@@ -149,7 +152,7 @@ private:
 	BTabView* fSearchTabs = nullptr;
 	BCardView* fContentHost = nullptr;
 	SongListView* fResults = nullptr;
-	BListView* fGenericLists[5] = {nullptr, nullptr, nullptr, nullptr,
+	GenericListView* fGenericLists[5] = {nullptr, nullptr, nullptr, nullptr,
 		nullptr};
 	// 歌手 / 用户 tab 用头像网格（下标对应 slot：2=歌手 3=用户）
 	AvatarGridView* fAvatarGrids[2] = {nullptr, nullptr};
@@ -165,6 +168,7 @@ private:
 	NowPlayingBadge* fNowBadge = nullptr;
 	bool fShowingNow = false;
 	CommentsWindow* fCommentsWindow = nullptr;
+	std::vector<DetailWindow*> fDetailWindows;
 
 	// 底部播放底板
 	BView* fTransport = nullptr;
@@ -184,6 +188,7 @@ private:
 	ncm::Player* fPlayer = nullptr;
 	BMessageRunner* fTicker = nullptr;
 	int32 fCurrentIndex = -1;
+	long long fPlayingSongId = 0; // 正在放的歌的 id（换队列后靠它对回索引）
 	int32 fPlayMode = 0; // 0 顺序 1 单曲 2 随机
 	bool fLiked = false;
 	int32 fPendingPlay = -1;

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "AvatarGrid.h"
+#include "GenericList.h"
 #include "net/cachepaths.h"
 #include "net/HttpRangeSource.h"
 #include "DetailWindow.h"
@@ -216,6 +217,12 @@ MainWindow::MainWindow()
 
 MainWindow::~MainWindow()
 {
+	for (DetailWindow* window : fDetailWindows) {
+		if (window != nullptr && window->Lock()) {
+			window->Quit();
+		}
+	}
+
 	delete fPlayer;
 	delete fApi;
 }
@@ -292,12 +299,8 @@ void MainWindow::_BuildContent()
 			content = new BScrollView("grid-scroll", grid, 0, false, true);
 			fAvatarGrids[i - 1 - 2] = grid;
 		} else {
-			// 第三个参数是 flags：别把 B_PLAIN_BORDER（值为 0）当 flags 传进去，
-			// 那样 B_WILL_DRAW 被清掉，列表整个不画东西
-			BListView* list = new BListView("generic",
-				B_SINGLE_SELECTION_LIST,
-				B_WILL_DRAW | B_FRAME_EVENTS | B_NAVIGABLE);
-			list->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
+			// 和单曲页同一套表格外观（封面 + 名称 + 副标题）
+			GenericListView* list = new GenericListView();
 			list->SetInvocationMessage(new BMessage(kMessageGenericOpen));
 			fGenericLists[i - 1] = list;
 			content = list;
@@ -444,6 +447,7 @@ void MainWindow::ShowArtist(long long id, const char* name)
 {
 	auto* detail = new DetailWindow(BMessenger(this), kDetailArtist);
 	detail->LoadArtist(id, name);
+	fDetailWindows.push_back(detail);
 	detail->Show();
 }
 
@@ -451,6 +455,7 @@ void MainWindow::ShowAlbum(long long id, const char* name)
 {
 	auto* detail = new DetailWindow(BMessenger(this), kDetailAlbum);
 	detail->LoadAlbum(id, name);
+	fDetailWindows.push_back(detail);
 	detail->Show();
 }
 
@@ -513,15 +518,10 @@ void MainWindow::MessageReceived(BMessage* message)
 				return;
 			}
 
-			BListView* list = fGenericLists[slot];
+			GenericListView* list = fGenericLists[slot];
 			if (list != nullptr) {
-				list->MakeEmpty();
-				for (const ncm::GenericItem& item : items) {
-					BString label(item.name.c_str());
-					if (!item.subtitle.empty())
-						label << "  ·  " << item.subtitle.c_str();
-					list->AddItem(new BStringItem(label.String()));
-				}
+				list->Fill(items);
+				_FetchAvatars(slot); // 封面/头像后台下载
 			}
 			return;
 		}
@@ -531,11 +531,13 @@ void MainWindow::MessageReceived(BMessage* message)
 			const int32 slot = fTabIndex - 1;
 			if (slot < 0 || slot >= kTabCount - 1)
 				return;
-			BListView* list = slot >= 0 && slot < kTabCount - 1
+			GenericListView* list = slot >= 0 && slot < kTabCount - 1
 				? fGenericLists[slot] : nullptr;
 			if (list == nullptr)
 				return;
-			const int32 index = list->CurrentSelection();
+			auto* selected = static_cast<GenericRow*>(list->CurrentSelection());
+			const int32 index = selected != nullptr
+				? list->IndexOf(selected) : -1;
 			if (index < 0
 				|| index >= static_cast<int32>(fGenericItems[slot].size()))
 				return;
@@ -691,16 +693,49 @@ void MainWindow::MessageReceived(BMessage* message)
 		}
 
 		case kMessageCommentsClosed:
+		{
+			void* window = nullptr;
+			if (message->FindPointer("window", &window) == B_OK
+				&& window != nullptr) {
+				auto* comments = static_cast<CommentsWindow*>(window);
+				if (comments->Lock()) {
+					comments->Quit(); // 已加锁：Quit 释放对象
+				}
+			}
 			fCommentsWindow = nullptr;
 			return;
+		}
 
 		case kMessageAvatarsDone:
 		{
 			int32 slot = -1;
-			if (message->FindInt32("slot", &slot) == B_OK
-				&& (slot == 2 || slot == 3)
+			if (message->FindInt32("slot", &slot) != B_OK)
+				return;
+			if ((slot == 2 || slot == 3)
 				&& fAvatarGrids[slot - 2] != nullptr)
 				fAvatarGrids[slot - 2]->RefreshAvatars();
+			else if (slot >= 0 && slot < kTabCount - 1
+				&& fGenericLists[slot] != nullptr)
+				fGenericLists[slot]->RefreshThumbs();
+			return;
+		}
+
+		case kMessageDetailClosed:
+		{
+			void* window = nullptr;
+			if (message->FindPointer("window", &window) == B_OK
+				&& window != nullptr) {
+				auto* detail = static_cast<DetailWindow*>(window);
+				for (size_t i = 0; i < fDetailWindows.size(); i++) {
+					if (fDetailWindows[i] == detail) {
+						fDetailWindows.erase(fDetailWindows.begin() + i);
+						break;
+					}
+				}
+				if (detail->Lock()) {
+					detail->Quit(); // 已加锁：Quit 会释放对象
+				}
+			}
 			return;
 		}
 
@@ -1151,7 +1186,7 @@ void MainWindow::_ClearGeneric()
 		fGenericItems[i].clear();
 		fLock.Unlock();
 		if (fGenericLists[i] != nullptr)
-			fGenericLists[i]->MakeEmpty();
+			fGenericLists[i]->Clear();
 	}
 	fSongReady = false;
 }
@@ -1226,10 +1261,8 @@ int32 MainWindow::_SearchThread(void* data)
 
 void MainWindow::_FillResults()
 {
-	// 上一次的关键词想用的结果已经过时，重新起播
-	fPlayer->Stop();
+	// 换队列不停播：正在放的歌还在新结果里就把索引对回去，不在就先挂着
 	fResults->Clear();
-	fCurrentIndex = -1;
 	fPlayButton->SetKind(TransportButton::kPlay);
 	fSeek->SetValue(0);
 	fSeek->SetEnabled(false);
@@ -1241,6 +1274,9 @@ void MainWindow::_FillResults()
 		fResults->AddRow(new SongRow(fSongs[i]));
 	}
 	fLock.Unlock();
+
+	// 正在放的歌如果还在新队列里，把当前索引对回去
+	fCurrentIndex = fPlayingSongId > 0 ? _IndexOfSong(fPlayingSongId) : -1;
 
 	fBusy = false;
 	fSongReady = true;
@@ -1446,6 +1482,8 @@ void MainWindow::_StartPlay(int32 index)
 
 	fLock.Lock();
 	const bool valid = index >= 0 && static_cast<size_t>(index) < fSongs.size();
+	if (valid)
+		fPlayingSongId = fSongs[index].id;
 	fLock.Unlock();
 
 	if (!valid)

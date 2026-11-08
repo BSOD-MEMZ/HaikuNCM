@@ -57,7 +57,7 @@ DetailWindow::DetailWindow(BMessenger target, int kind)
 		  kind == kDetailArtist ? B_TRANSLATE("歌手")
 		  : kind == kDetailPlaylist ? B_TRANSLATE("歌单")
 									: B_TRANSLATE("专辑"),
-		  B_TITLED_WINDOW, B_QUIT_ON_WINDOW_CLOSE)
+		  B_TITLED_WINDOW, 0)
 	, fTarget(target)
 	, fKind(kind)
 {
@@ -140,10 +140,6 @@ void DetailWindow::LoadArtist(long long id, const char* name)
 {
 	SetTitle(name != nullptr && name[0] != '\0' ? name
 											   : B_TRANSLATE("歌手"));
-	if (fLoaded)
-		return;
-	fLoaded = true;
-
 	auto* job = new Job{this, id};
 	thread_id thread = spawn_thread(_ArtistThread, "ncm-artist",
 		B_NORMAL_PRIORITY, job);
@@ -158,10 +154,6 @@ void DetailWindow::LoadAlbum(long long id, const char* name)
 {
 	SetTitle(name != nullptr && name[0] != '\0' ? name
 											   : B_TRANSLATE("专辑"));
-	if (fLoaded)
-		return;
-	fLoaded = true;
-
 	auto* job = new Job{this, id};
 	thread_id thread = spawn_thread(_AlbumThread, "ncm-album",
 		B_NORMAL_PRIORITY, job);
@@ -176,10 +168,6 @@ void DetailWindow::LoadPlaylist(long long id, const char* name)
 {
 	SetTitle(name != nullptr && name[0] != '\0' ? name
 											   : B_TRANSLATE("歌单"));
-	if (fLoaded)
-		return;
-	fLoaded = true;
-
 	auto* job = new Job{this, id};
 	thread_id thread = spawn_thread(_PlaylistThread, "ncm-playlist",
 		B_NORMAL_PRIORITY, job);
@@ -543,7 +531,22 @@ void DetailWindow::MessageReceived(BMessage* message)
 
 bool DetailWindow::QuitRequested()
 {
-	return true;
+	// 隐藏而不是退出：子窗口退出绝不能连坐整个程序，
+	// 对象由主窗口收到通知后 Lock+Quit 回收
+	if (Lock()) {
+		Hide();
+		Unlock();
+	}
+
+	BMessage closed(kMessageDetailClosed);
+	closed.AddPointer("window", this);
+	fTarget.SendMessage(&closed);
+	return false;
+}
+
+void DetailWindow::Quit()
+{
+	BWindow::Quit();
 }
 
 void DetailWindow::_FillSongs()

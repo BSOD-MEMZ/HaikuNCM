@@ -5,7 +5,7 @@
 #include <String.h>
 #include <Window.h>
 
-class BTextView;
+class BListView;
 
 enum {
 	kMessageCommentsClosed = 'cmcl',
@@ -19,13 +19,19 @@ public:
 
 	void MessageReceived(BMessage* message) override;
 	bool QuitRequested() override;
+	void Quit() override;
+
+public:
+	void RelayoutItems(); // 列表宽度变了要重新折行
 
 private:
 	void _SetText(const BString& text);
+	void _FillComments(BMessage* message);
 
 	BMessenger fTarget;
 	long long fSongId;
-	BTextView* fText = nullptr;
+	BListView* fList = nullptr;
+	friend class CommentListView;
 	volatile bool fLoading = false;
 };
 

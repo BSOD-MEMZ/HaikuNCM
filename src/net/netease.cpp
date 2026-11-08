@@ -297,7 +297,9 @@ bool NeteaseApi::SearchGeneric(int type, const std::string& keyword,
 	for (const json& item : result[listKey]) {
 		GenericItem entry;
 		try {
-		entry.id = item.value("id", 0LL);
+		// userprofiles 的主键是 userId，不是 id；取错会把所有用户的 id 都变 0
+		entry.id = type == 1002 ? item.value("userId", 0LL)
+								: item.value("id", 0LL);
 		entry.name = item.value(nameKey, "");
 
 		switch (type) {
@@ -366,6 +368,15 @@ bool NeteaseApi::SearchGeneric(int type, const std::string& keyword,
 			else if (type == 1002 && item.contains("avatarUrl")
 				&& item["avatarUrl"].is_string())
 				entry.imageUrl = item["avatarUrl"].get<std::string>() + "?param=120y120";
+			else if (type == 1000 && item.contains("coverImgUrl")
+				&& item["coverImgUrl"].is_string())
+				entry.imageUrl = item["coverImgUrl"].get<std::string>() + "?param=120y120";
+			else if (type == 10 && item.contains("picUrl")
+				&& item["picUrl"].is_string())
+				entry.imageUrl = item["picUrl"].get<std::string>() + "?param=120y120";
+			else if (type == 1009 && item.contains("coverUrl")
+				&& item["coverUrl"].is_string())
+				entry.imageUrl = item["coverUrl"].get<std::string>() + "?param=120y120";
 		} catch (const std::exception&) {
 			continue; // 单条脏数据跳过，不要让整次搜索失败
 		}
