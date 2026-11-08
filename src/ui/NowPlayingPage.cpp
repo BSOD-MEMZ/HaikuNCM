@@ -285,7 +285,7 @@ void LrcView::SetLyric(const BString& lrc, const BString& translation,
 
 	fHasTranslation = merge(translation, false);
 	fHasRoman = merge(romaji, true);
-	fShowTranslation = fHasTranslation;
+	// 不动 fShowTranslation / fShowRoman：那是用户的选择，切歌后要保持
 
 	Invalidate();
 }
@@ -522,8 +522,8 @@ NowPlayingView::NowPlayingView()
 		new BMessage(kMessageToggleTrans));
 	fRomaToggle = new BCheckBox("roma", B_TRANSLATE("音"),
 		new BMessage(kMessageToggleRoma));
-	fTransToggle->SetTarget(this);
-	fRomaToggle->SetTarget(this);
+	// 不要 SetTarget：构造时视图还没挂进窗口，BMessenger 是无效的，
+	// 消息会凭空消失。不带 target 让消息落到窗口，由主窗口转交
 
 	fInfo = new BGroupView("np-info", B_VERTICAL, B_USE_SMALL_SPACING);
 	BLayoutBuilder::Group<>(static_cast<BGroupView*>(fInfo), B_VERTICAL,
@@ -607,6 +607,7 @@ void NowPlayingView::_LoadLyric(const BString& lyricPath,
 
 void NowPlayingView::_RefreshToggles()
 {
+	// 有没有数据决定显不显示；勾不勾则尊重用户上次的选择，切歌后不变
 	if (fLrc->HasTranslation())
 		fTransToggle->Show();
 	else
@@ -617,9 +618,10 @@ void NowPlayingView::_RefreshToggles()
 	else
 		fRomaToggle->Hide();
 
-	fTransToggle->SetValue(fLrc->HasTranslation() ? B_CONTROL_ON
-												 : B_CONTROL_OFF);
-	fRomaToggle->SetValue(B_CONTROL_OFF);
+	fTransToggle->SetValue(fTransPref ? B_CONTROL_ON : B_CONTROL_OFF);
+	fRomaToggle->SetValue(fRomaPref ? B_CONTROL_ON : B_CONTROL_OFF);
+	fLrc->SetShowTranslation(fTransPref);
+	fLrc->SetShowRoman(fRomaPref);
 }
 
 void NowPlayingView::SetPosition(double seconds)
@@ -627,21 +629,29 @@ void NowPlayingView::SetPosition(double seconds)
 	fLrc->SetPosition(seconds);
 }
 
+void NowPlayingView::SetShowTranslation(bool on)
+{
+	fTransPref = on;
+	fLrc->SetShowTranslation(on);
+}
+
+void NowPlayingView::SetShowRoman(bool on)
+{
+	fRomaPref = on;
+	fLrc->SetShowRoman(on);
+}
+
+void NowPlayingView::ToggleTrans()
+{
+	SetShowTranslation(fTransToggle->Value() == B_CONTROL_ON);
+}
+
+void NowPlayingView::ToggleRoma()
+{
+	SetShowRoman(fRomaToggle->Value() == B_CONTROL_ON);
+}
+
 void NowPlayingView::MessageReceived(BMessage* message)
 {
-	switch (message->what) {
-		case kMessageToggleTrans:
-			fLrc->SetShowTranslation(fTransToggle->Value() == B_CONTROL_ON);
-			Invalidate();
-			return;
-
-		case kMessageToggleRoma:
-			fLrc->SetShowRoman(fRomaToggle->Value() == B_CONTROL_ON);
-			Invalidate();
-			return;
-
-		default:
-			break;
-	}
 	BView::MessageReceived(message);
 }

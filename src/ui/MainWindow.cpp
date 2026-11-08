@@ -7,7 +7,6 @@
 #include "LoginWindow.h"
 #include "CommentsWindow.h"
 #include "NowPlayingPage.h"
-#include "ThemeColor.h"
 #include "PlaylistWindow.h"
 #include "SeekSlider.h"
 #include "SongRow.h"
@@ -506,8 +505,9 @@ void MainWindow::MessageReceived(BMessage* message)
 			fLock.Unlock();
 			fGenericReady[slot] = true;
 
-			// 歌手 / 用户是头像网格，其它是普通列表
-			if (slot >= 2 && fAvatarGrids[slot - 2] != nullptr) {
+			// 歌手(2) / 用户(3) 是头像网格；注意 slot=4(声音) 不是，
+			// 数组只有两个格子，用 slot-2 会越界读到野指针
+			if ((slot == 2 || slot == 3) && fAvatarGrids[slot - 2] != nullptr) {
 				fAvatarGrids[slot - 2]->SetItems(items);
 				_FetchAvatars(slot);
 				return;
@@ -659,6 +659,17 @@ void MainWindow::MessageReceived(BMessage* message)
 			return;
 		}
 
+		case kMessageToggleTrans:
+		case kMessageToggleRoma:
+			// 复选框的消息落到窗口这里，转交给播放页（它自己读新状态）
+			if (fNowView == nullptr)
+				return;
+			if (message->what == kMessageToggleTrans)
+				fNowView->ToggleTrans();
+			else
+				fNowView->ToggleRoma();
+			return;
+
 		case kMessageShowComments:
 		{
 			fLock.Lock();
@@ -686,8 +697,9 @@ void MainWindow::MessageReceived(BMessage* message)
 		case kMessageAvatarsDone:
 		{
 			int32 slot = -1;
-			if (message->FindInt32("slot", &slot) == B_OK && slot >= 2
-				&& slot < kTabCount - 1 && fAvatarGrids[slot - 2] != nullptr)
+			if (message->FindInt32("slot", &slot) == B_OK
+				&& (slot == 2 || slot == 3)
+				&& fAvatarGrids[slot - 2] != nullptr)
 				fAvatarGrids[slot - 2]->RefreshAvatars();
 			return;
 		}
@@ -1666,9 +1678,8 @@ void MainWindow::_PushNowPlaying(const ncm::Song& song)
 		mini = BTranslationUtils::GetBitmapFile(CoverPath(song.id).c_str());
 	fNowBadge->SetInfo(song.name.c_str(), song.artist.c_str(), mini);
 
-	// 封面主题色铺满整个窗口（导航栏以外）
-	const rgb_color theme = ThemeColorFromCover(mini);
-	_ApplyTheme(theme);
+	// 主题色方案先撤了，统一面板色
+	_ApplyTheme(ui_color(B_PANEL_BACKGROUND_COLOR));
 
 	fNowView->SetSong(song.name.c_str(), song.artist.c_str(), song.artistId,
 		song.album.c_str(), song.albumId, coverPath.c_str(),

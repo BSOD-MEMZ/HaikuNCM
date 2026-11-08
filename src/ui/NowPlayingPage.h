@@ -112,6 +112,10 @@ public:
 		const BString& translationPath, const BString& romajiPath);
 	void SetPosition(double seconds);
 	void SetThemeColor(rgb_color color);
+	void SetShowTranslation(bool on);
+	void SetShowRoman(bool on);
+	void ToggleTrans();  // 复选框被点（消息由主窗口转交）
+	void ToggleRoma();
 
 	void MessageReceived(BMessage* message) override;
 
@@ -130,6 +134,8 @@ private:
 	BView* fInfo = nullptr;
 
 	rgb_color fTheme;
+	bool fTransPref = true;  // 用户对"译/音"的选择，切歌后保持
+	bool fRomaPref = false;
 };
 
 #endif
