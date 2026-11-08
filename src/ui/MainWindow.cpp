@@ -280,6 +280,12 @@ void MainWindow::_BuildMenu()
 	fMenuBar->AddItem(helpMenu);
 }
 
+void MainWindow::PlayIndex(int32 index)
+{
+	// 搜索是异步的，结果没回来前先记下，等 _FillResults 后再播
+	fPendingPlay = index;
+}
+
 void MainWindow::SearchFor(const char* keyword)
 {
 	if (keyword == nullptr)
@@ -586,6 +592,12 @@ void MainWindow::_FillResults()
 	fStatus->SetText(status.String());
 
 	_StartCoverDownload();
+
+	if (fPendingPlay >= 0) {
+		const int32 target = fPendingPlay;
+		fPendingPlay = -1;
+		_StartPlay(target);
+	}
 }
 
 void MainWindow::_StartCoverDownload()
@@ -660,6 +672,8 @@ void MainWindow::_StartPlay(int32 index)
 		return;
 	}
 
+	fResults->Select(index, false);
+	fResults->ScrollToSelection();
 	fBusy = true;
 	fStatus->SetText(B_TRANSLATE("正在获取播放地址…"));
 

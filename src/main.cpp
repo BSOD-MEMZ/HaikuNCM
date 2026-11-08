@@ -23,13 +23,21 @@ public:
 		fShowLogin = show;
 	}
 
+	void SetPlayAfterSearch(int32 index)
+	{
+		fPlayAfterSearch = index;
+	}
+
 	void ReadyToRun() override
 	{
 		auto* window = new MainWindow();
 		window->Show();
 
-		if (fInitialSearch != nullptr)
+		if (fInitialSearch != nullptr) {
 			window->SearchFor(fInitialSearch);
+			if (fPlayAfterSearch >= 0)
+				window->PlayIndex(fPlayAfterSearch);
+		}
 
 		if (fShowLogin)
 			window->PostMessage('logn');
@@ -37,6 +45,7 @@ public:
 
 private:
 	const char* fInitialSearch = nullptr;
+	int32 fPlayAfterSearch = -1;
 	bool fShowLogin = false;
 };
 
@@ -45,10 +54,14 @@ private:
 int main(int argc, char** argv)
 {
 	NCMApplication application;
-	if (argc > 2 && strcmp(argv[1], "--search") == 0)
-		application.SetInitialSearch(argv[2]);
-	if (argc > 1 && strcmp(argv[1], "--login") == 0)
-		application.SetShowLogin(true);
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--search") == 0 && i + 1 < argc)
+			application.SetInitialSearch(argv[++i]);
+		else if (strcmp(argv[i], "--play") == 0 && i + 1 < argc)
+			application.SetPlayAfterSearch(atoi(argv[++i]));
+		else if (strcmp(argv[i], "--login") == 0)
+			application.SetShowLogin(true);
+	}
 
 	application.Run();
 	return 0;

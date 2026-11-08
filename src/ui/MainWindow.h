@@ -56,6 +56,7 @@ public:
 	~MainWindow() override;
 
 	void SearchFor(const char* keyword);
+	void PlayIndex(int32 index);
 
 	void MessageReceived(BMessage* message) override;
 	bool QuitRequested() override;
@@ -104,6 +105,7 @@ private:
 	int32 fCurrentIndex = -1;
 	int32 fPlayMode = 0; // 0 顺序 1 单曲 2 随机
 	bool fLiked = false;
+	int32 fPendingPlay = -1;
 	bool fSeeking = false;
 
 	BLocker fLock;
