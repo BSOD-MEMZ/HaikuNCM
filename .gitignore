@@ -11,3 +11,7 @@ probe_sample.*
 
 # 工具与记忆
 .workbuddy/
+
+# 解码验证产物
+probe_decoded.wav
+*.wav
