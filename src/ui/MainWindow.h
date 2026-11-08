@@ -20,8 +20,9 @@ class SeekSlider;
 class BStringView;
 class BTextControl;
 class PlaylistWindow;
+class SongListView;
 class SongHeader;
-class UserMenuItem;
+class BMenu;
 class TransportButton;
 
 namespace ncm {
@@ -33,6 +34,9 @@ enum {
 	kMessageSearchDone = 'sdon',
 	kMessageCoversDone = 'cver',
 	kMessagePlay = 'play',
+	kMessagePlayNext = 'plnx',
+	kMessageQueueReorder = 'qreo',
+	kMessageQueueDelete = 'qdel',
 	kMessagePlayDone = 'pldn',
 	kMessageStatus = 'stat',
 	kMessageFocusSearch = 'fsrc',
@@ -47,6 +51,7 @@ enum {
 	kMessageMode = 'mode',
 	kMessageLike = 'like',
 	kMessagePlaylist = 'plst',
+	kMessagePlayIndex = 'plix',
 	kMessageUserMenu = 'usrr',
 	kMessageShowLogin = 'shlg',
 	kMessageDoLogout = 'dlgo',
@@ -69,7 +74,6 @@ private:
 	void _StartPlay(int32 index);
 	void _FillResults();
 	void _ApplyCovers();
-	void _UpdateSelectionLabel();
 	void _UpdateTransport();
 	void _PostIfAlive(BMessage* message);
 	void _StartCoverDownload();
@@ -78,6 +82,7 @@ private:
 	void _ToggleLike();
 	void _OpenPlaylist();
 	void _SyncPlaylist();
+	int32 _IndexOfSong(long long id);
 	void _UpdateModeLabel();
 
 	static int32 _SearchThread(void* data);
@@ -85,12 +90,14 @@ private:
 	static int32 _CoverThread(void* data);
 
 	BMenuBar* fMenuBar = nullptr;
-	UserMenuItem* fUserItem = nullptr;
+	BMenuBar* fUserMenuBar = nullptr;
+	BMenu* fUserMenu = nullptr;
+	BMenuItem* fUserItem = nullptr;
+	BMenuItem* fLogoutItem = nullptr;
 
 	BTextControl* fSearchField = nullptr;
 	BButton* fSearchButton = nullptr;
-	SongHeader* fHeader = nullptr;
-	BListView* fResults = nullptr;
+	SongListView* fResults = nullptr;
 
 	TransportButton* fPrevButton = nullptr;
 	TransportButton* fPlayButton = nullptr;

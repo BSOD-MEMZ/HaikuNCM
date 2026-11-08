@@ -1,14 +1,11 @@
 #include "MainWindow.h"
 
-#include "ListMetrics.h"
 #include "net/HttpRangeSource.h"
 #include "LoginWindow.h"
 #include "PlaylistWindow.h"
-#include "SongHeader.h"
-#include "SongItem.h"
 #include "SeekSlider.h"
+#include "SongRow.h"
 #include "TransportButton.h"
-#include "UserMenuItem.h"
 #include "audio/Player.h"
 
 #include <Alert.h>
@@ -34,14 +31,11 @@
 #include <sys/stat.h>
 #include <utility>
 
-using namespace ncm::metrics;
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "MainWindow"
 
 namespace {
-
-const uint32 kSelectionChanged = 'slch';
 
 BString Prefixed(const char* prefix, const std::string& detail)
 {
@@ -154,9 +148,20 @@ MainWindow::MainWindow()
 	fMenuBar = new BMenuBar("menubar");
 	_BuildMenu();
 
-	// 登录状态贴在菜单栏最右侧，是一段可点文字（不是按钮），对齐 HaikuDepot
-	fUserItem = new UserMenuItem(new BMessage(kMessageUserMenu));
-	fUserItem->SetLabel(B_TRANSLATE("登录…"));
+	fUserMenuBar = new BMenuBar("user-menubar");
+	fUserMenu = new BMenu(B_TRANSLATE("未登录"));
+	fUserMenu->AddItem(fUserItem);
+	BMenuItem* logoutItem = new BMenuItem(B_TRANSLATE("退出登录"),
+		new BMessage(kMessageLogout));
+	logoutItem->SetEnabled(false);
+	fUserMenu->AddItem(logoutItem);
+	fLogoutItem = logoutItem;
+	fUserMenuBar->AddItem(fUserMenu);
+	fUserMenuBar->SetExplicitMaxSize(BSize(B_SIZE_UNSET,
+		fMenuBar->MaxSize().height));
+
+	// 登录菜单：照抄 HaikuDepot —— 主菜单栏 + 右侧等高的用户菜单栏
+	fUserItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
 
 	fSearchField = new BTextControl("search", B_TRANSLATE("搜索"), "",
 		new BMessage(kMessageSearch));
@@ -165,12 +170,19 @@ MainWindow::MainWindow()
 	fSearchButton = new BButton("search-button", B_TRANSLATE("搜索"),
 		new BMessage(kMessageSearch));
 
-	fHeader = new SongHeader();
-	fResults = new BListView("results", B_SINGLE_SELECTION_LIST);
-	fResults->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
-	fResults->SetSelectionMessage(new BMessage(kSelectionChanged));
+	fResults = new SongListView();
 	fResults->SetInvocationMessage(new BMessage(kMessagePlay));
-	fResults->SetExplicitMinSize(BSize(560, 260));
+
+	const float scale = be_plain_font->Size() / 12.0f;
+	fResults->AddColumn(new SongTitleColumn(B_TRANSLATE("标题"),
+		280 * scale, 160 * scale, 600 * scale), 0);
+	fResults->AddColumn(new SongAlbumColumn(B_TRANSLATE("专辑"),
+		180 * scale, 80 * scale, 500 * scale), 1);
+	fResults->AddColumn(new SongHeartColumn(B_TRANSLATE("喜欢"),
+		50 * scale, 40 * scale, 80 * scale), 2);
+	fResults->AddColumn(new SongDurationColumn(B_TRANSLATE("时长"),
+		70 * scale, 50 * scale, 120 * scale), 3);
+	fResults->SetSortingEnabled(true);
 
 	const uint32 topBottom = BControlLook::B_TOP_BORDER
 		| BControlLook::B_BOTTOM_BORDER;
@@ -209,7 +221,7 @@ MainWindow::MainWindow()
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 		.AddGroup(B_HORIZONTAL, 0)
 			.Add(fMenuBar, 1.0f)
-			.Add(fUserItem)
+			.Add(fUserMenuBar, 0.0f)
 		.End()
 		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
 			.SetInsets(B_USE_WINDOW_INSETS)
@@ -217,8 +229,7 @@ MainWindow::MainWindow()
 				.Add(fSearchField)
 				.Add(fSearchButton)
 			.End()
-			.Add(fHeader)
-			.Add(new BScrollView("scroll", fResults, 0, false, true))
+			.Add(fResults)
 			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
 				.AddGroup(B_HORIZONTAL, 0)
 					.Add(fPrevButton)
@@ -246,11 +257,9 @@ MainWindow::MainWindow()
 	std::string nickname;
 	if (LoadSession(&cookie, &nickname) && !cookie.empty()) {
 		fApi->SetCookie(cookie);
-		BString label("使用 ");
-		label << nickname.c_str() << " 登录";
-		fUserItem->SetLabel(label.String());
-		fUserItem->SetEnabled(false);
-		fUserItem->Invalidate();
+		BString label(B_TRANSLATE("使用 "));
+		label << nickname.c_str();
+		fUserMenu->Superitem()->SetLabel(label.String());
 	}
 }
 
@@ -330,19 +339,28 @@ void MainWindow::MessageReceived(BMessage* message)
 			return;
 
 		case kMessagePlay:
+		{
 			if (fBusy)
 				return;
-			if (fPlayer->IsLoaded()
-				&& fResults->CurrentSelection() == fCurrentIndex)
+			auto* row = static_cast<SongRow*>(fResults->CurrentSelection());
+			const int32 target = row != nullptr
+				? _IndexOfSong(row->Song().id) : -1;
+			if (target < 0)
+				return;
+			if (fPlayer->IsLoaded() && target == fCurrentIndex)
 				_TogglePlayback();
 			else
-				_StartPlay(fResults->CurrentSelection());
+				_StartPlay(target);
 			return;
+		}
 
 		case kMessagePrev:
 		{
-			int32 target = fCurrentIndex > 0 ? fCurrentIndex - 1
-											: fResults->CountItems() - 1;
+			int32 target;
+			fLock.Lock();
+			target = fCurrentIndex > 0
+				? fCurrentIndex - 1 : static_cast<int32>(fSongs.size()) - 1;
+			fLock.Unlock();
 			if (target >= 0)
 				_StartPlay(target);
 			return;
@@ -350,7 +368,9 @@ void MainWindow::MessageReceived(BMessage* message)
 
 		case kMessageNext:
 		{
-			const int32 count = fResults->CountItems();
+			fLock.Lock();
+			const int32 count = static_cast<int32>(fSongs.size());
+			fLock.Unlock();
 			if (count <= 0)
 				return;
 
@@ -393,9 +413,13 @@ void MainWindow::MessageReceived(BMessage* message)
 				return;
 			}
 
+			int32 doneIndex = -1;
+			message->FindInt32("index", &doneIndex);
+			if (doneIndex >= 0)
+				fCurrentIndex = doneIndex;
+
 			const char* path = nullptr;
 			if (message->FindString("path", &path) == B_OK) {
-				fCurrentIndex = fResults->CurrentSelection();
 
 				std::string error;
 				if (!fPlayer->Load(path, &error)) {
@@ -470,7 +494,10 @@ void MainWindow::MessageReceived(BMessage* message)
 				fSeek->SetValue(1000);
 				fTimeLabel->SetText(BString(FormatTime(fPlayer->DurationSeconds()).c_str()));
 
-				if (fPlayMode != 1 && fResults->CountItems() > 0)
+				fLock.Lock();
+				const bool hasSongs = !fSongs.empty();
+				fLock.Unlock();
+				if (fPlayMode != 1 && hasSongs)
 					PostMessage(kMessageNext);
 				return;
 			}
@@ -500,29 +527,100 @@ void MainWindow::MessageReceived(BMessage* message)
 			_OpenPlaylist();
 			return;
 
+		case kMessagePlayNext:
+		{
+			auto* row = static_cast<SongRow*>(fResults->CurrentSelection());
+			if (row == nullptr)
+				return;
+			const ncm::Song song = row->Song();
+
+			fLock.Lock();
+			const bool playing = fCurrentIndex >= 0
+				&& static_cast<size_t>(fCurrentIndex) < fSongs.size();
+			const int32 insertAt = playing ? fCurrentIndex + 1 : 0;
+			fSongs.insert(fSongs.begin() + insertAt, song);
+			const long long currentId = playing ? fSongs[fCurrentIndex].id : -1;
+			fLock.Unlock();
+
+			if (!playing) {
+				_StartPlay(_IndexOfSong(song.id));
+				return;
+			}
+
+			// 主列表：插到当前行后面，两份顺序保持一致
+			const int32 rowCount = fResults->CountRows(nullptr);
+			for (int32 i = 0; i < rowCount; i++) {
+				auto* r = static_cast<SongRow*>(fResults->RowAt(i, nullptr));
+				if (r != nullptr && r->Song().id == currentId) {
+					fResults->AddRow(new SongRow(song), i + 1);
+					break;
+				}
+			}
+
+			_SyncPlaylist();
+			BString status(B_TRANSLATE("已加入下一首播放: "));
+			status << song.name.c_str();
+			fStatus->SetText(status.String());
+			return;
+		}
+
+		case kMessageQueueReorder:
+		{
+			// 播放列表窗口拖动排序：按歌 id 顺序重建 fSongs
+			const int32 count = message->FindInt32("count");
+			std::vector<long long> order;
+			order.reserve(count);
+			for (int32 i = 0; i < count; i++) {
+				int64 id = 0;
+				message->FindInt64("id", i, &id);
+				order.push_back(static_cast<long long>(id));
+			}
+
+			fLock.Lock();
+			std::vector<ncm::Song> reordered;
+			for (long long id : order) {
+				for (const ncm::Song& song : fSongs) {
+					if (song.id == id) {
+						reordered.push_back(song);
+						break;
+					}
+				}
+			}
+			fSongs.swap(reordered);
+			const long long currentId = fCurrentIndex >= 0
+				&& static_cast<size_t>(fCurrentIndex) < fSongs.size()
+				? fSongs[fCurrentIndex].id : -1;
+			fLock.Unlock();
+
+			// 当前曲目索引跟着重排
+			fCurrentIndex = _IndexOfSong(currentId);
+			return;
+		}
+
+		case kMessageQueueDelete:
+		{
+			int32 deleteIndex = -1;
+			if (message->FindInt32("index", &deleteIndex) != B_OK
+				|| deleteIndex < 0)
+				return;
+
+			fLock.Lock();
+			const bool removingCurrent = deleteIndex == fCurrentIndex;
+			fSongs.erase(fSongs.begin() + deleteIndex);
+			fLock.Unlock();
+
+			if (removingCurrent)
+				fCurrentIndex = -1;
+			else if (deleteIndex < fCurrentIndex)
+				fCurrentIndex--;
+			return;
+		}
+
 		case kMessagePlayIndex:
 		{
 			int32 index = -1;
 			if (message->FindInt32("index", &index) == B_OK)
 				_StartPlay(index);
-			return;
-		}
-
-		case kMessageUserMenu:
-		{
-			BPopUpMenu* menu = new BPopUpMenu("user", false, false);
-			menu->SetFont(be_plain_font);
-			menu->AddItem(new BMenuItem(B_TRANSLATE("登录…"),
-				new BMessage(kMessageLogin)));
-			BMenuItem* logout = new BMenuItem(B_TRANSLATE("退出登录"),
-				new BMessage(kMessageLogout));
-			logout->SetEnabled(fApi->IsLoggedIn());
-			menu->AddItem(logout);
-
-			menu->SetTargetForItems(this);
-			BPoint where(Bounds().right - 40.0f, 12.0f);
-			ConvertToScreen(&where);
-			menu->Go(where, true, true, true);
 			return;
 		}
 
@@ -554,8 +652,7 @@ void MainWindow::MessageReceived(BMessage* message)
 		case kMessageLogout:
 			fApi->SetCookie(std::string());
 			remove(SessionPath().c_str());
-			fUserItem->SetLabel(B_TRANSLATE("登录…"));
-			fUserItem->SetEnabled(true);
+			fUserMenu->Superitem()->SetLabel(B_TRANSLATE("未登录"));
 			fStatus->SetText(B_TRANSLATE("已退出登录"));
 			return;
 
@@ -636,7 +733,7 @@ int32 MainWindow::_SearchThread(void* data)
 void MainWindow::_FillResults()
 {
 	fPlayer->Stop();
-	fResults->MakeEmpty();
+	fResults->Clear();
 	fCurrentIndex = -1;
 	fPlayButton->SetKind(TransportButton::kPlay);
 	fSeek->SetValue(0);
@@ -646,7 +743,7 @@ void MainWindow::_FillResults()
 	fLock.Lock();
 	const size_t count = fSongs.size();
 	for (size_t i = 0; i < count; i++)
-		fResults->AddItem(new SongItem(fSongs[i], static_cast<int32>(i)));
+		fResults->AddRow(new SongRow(fSongs[i]));
 	fLock.Unlock();
 
 	fBusy = false;
@@ -703,25 +800,19 @@ int32 MainWindow::_CoverThread(void* data)
 
 void MainWindow::_ApplyCovers()
 {
-	const int32 count = fResults->CountItems();
+	const int32 count = fResults->CountRows(nullptr);
 	for (int32 i = 0; i < count; i++) {
-		auto* item = dynamic_cast<SongItem*>(fResults->ItemAt(i));
-		if (item == nullptr)
+		auto* row = static_cast<SongRow*>(fResults->RowAt(i, nullptr));
+		if (row == nullptr)
 			continue;
 
-		const std::string path = CoverPath(item->Song().id);
+		const std::string path = CoverPath(row->Song().id);
 		BBitmap* bitmap = BTranslationUtils::GetBitmapFile(path.c_str());
-		if (bitmap != nullptr)
-			item->SetCover(bitmap);
+		if (bitmap != nullptr) {
+			row->SetCover(bitmap);
+			fResults->InvalidateRow(row);
+		}
 	}
-
-	fResults->Invalidate();
-}
-
-void MainWindow::_UpdateSelectionLabel()
-{
-	// 列表选择变化时只需重绘；播放条由播放动作驱动
-	fResults->Invalidate();
 }
 
 void MainWindow::_StartPlay(int32 index)
@@ -738,8 +829,22 @@ void MainWindow::_StartPlay(int32 index)
 		return;
 	}
 
-	fResults->Select(index, false);
-	fResults->ScrollToSelection();
+	{
+		fLock.Lock();
+		const long long songId = fSongs[index].id;
+		fLock.Unlock();
+
+		fResults->DeselectAll();
+		const int32 rowCount = fResults->CountRows(nullptr);
+		for (int32 i = 0; i < rowCount; i++) {
+			auto* row = static_cast<SongRow*>(fResults->RowAt(i, nullptr));
+			if (row != nullptr && row->Song().id == songId) {
+				fResults->AddToSelection(row);
+				fResults->ScrollTo(row);
+				break;
+			}
+		}
+	}
 	fBusy = true;
 	fStatus->SetText(B_TRANSLATE("正在获取播放地址…"));
 
@@ -803,6 +908,7 @@ int32 MainWindow::_PlayThread(void* data)
 		return 0;
 	}
 
+	result.AddInt32("index", index);
 	result.AddString("path", path.c_str());
 	self->_PostIfAlive(&result);
 	return 0;
@@ -883,6 +989,21 @@ void MainWindow::_OpenPlaylist()
 	fPlaylistWindow->Update(songs, fCurrentIndex);
 	fPlaylistWindow->Show();
 	fPlaylistWindow->Activate();
+}
+
+int32 MainWindow::_IndexOfSong(long long id)
+{
+	if (id < 0)
+		return -1;
+	fLock.Lock();
+	for (size_t i = 0; i < fSongs.size(); i++) {
+		if (fSongs[i].id == id) {
+			fLock.Unlock();
+			return static_cast<int32>(i);
+		}
+	}
+	fLock.Unlock();
+	return -1;
 }
 
 void MainWindow::_SyncPlaylist()

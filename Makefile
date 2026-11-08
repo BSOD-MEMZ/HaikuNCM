@@ -1,6 +1,6 @@
 CXX ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -g -Wall -Wextra
-INCLUDES = -Isrc -Ithird_party
+INCLUDES = -Isrc -Ithird_party -I/boot/system/develop/headers/private/interface
 LDLIBS = -lcurl -lssl -lcrypto -lnetwork
 
 NET_SRC = $(wildcard src/net/*.cpp)
@@ -14,7 +14,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/HaikuNCM: $(NET_SRC) $(UI_SRC) src/main.cpp third_party/nlohmann/json.hpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) $(UI_SRC) src/main.cpp $(THIRD_SRC) -lbe -lmedia -ltranslation -llocalestub $(LDLIBS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) $(UI_SRC) src/main.cpp $(THIRD_SRC) -lbe -lmedia -ltranslation -llocalestub -lcolumnlistview $(LDLIBS)
 
 $(BUILD_DIR)/ncmcli: $(NET_SRC) tools/ncmcli.cpp third_party/nlohmann/json.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) tools/ncmcli.cpp -lbe $(LDLIBS)
