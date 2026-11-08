@@ -66,12 +66,13 @@ void TransportButton::SetKind(Kind kind)
 	if (fKind == kind)
 		return;
 
-	// play <-> pause 切换时只换字形，其余重建
+	// play <-> pause 切换：交换两个字形指针（移动会把备用形清空，
+	// 第二次切换时 fShape 被赋成 null，字形就没了）
 	if ((fKind == kPlay && kind == kPause)
 		|| (fKind == kPause && kind == kPlay)) {
-		delete fShape;
+		BShape* swap = fShape;
 		fShape = fAltShape;
-		fAltShape = nullptr;
+		fAltShape = swap;
 		fKind = kind;
 		Invalidate();
 		return;

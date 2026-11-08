@@ -14,6 +14,7 @@ namespace ncm {
 struct Player::Impl {
 	BMediaFile* file = nullptr;
 	BMediaTrack* track = nullptr;
+	BPositionIO* source = nullptr; // 流式数据源（LoadStream 时持有）
 	BSoundPlayer* output = nullptr;
 	media_raw_audio_format format;
 	int channels = 0;
@@ -71,10 +72,11 @@ Player::~Player()
 	if (fImpl->track != nullptr && fImpl->file != nullptr)
 		fImpl->file->ReleaseTrack(fImpl->track);
 	delete fImpl->file;
+	delete fImpl->source;
 	delete fImpl;
 }
 
-bool Player::Load(const std::string& path, std::string* error)
+bool Player::LoadStream(BPositionIO* source, std::string* error)
 {
 	Stop();
 
@@ -83,21 +85,20 @@ bool Player::Load(const std::string& path, std::string* error)
 	fImpl->track = nullptr;
 	delete fImpl->file;
 	fImpl->file = nullptr;
-
-	BEntry entry(path.c_str(), true);
-	entry_ref ref;
-	if (entry.InitCheck() != B_OK || entry.GetRef(&ref) != B_OK) {
-		if (error != nullptr)
-			*error = "文件不存在: " + path;
-		return false;
-	}
+	delete fImpl->source;
+	fImpl->source = source;
 
 	// 换歌必须把渲染计数清零，否则时间会从上一首累计
 	fImpl->framesRendered = 0;
 	fImpl->finished = false;
 	fImpl->peak = 0.0f;
 
-	fImpl->file = new BMediaFile(&ref);
+	fImpl->file = new BMediaFile(source);
+	return _NegotiateTrack(error);
+}
+
+bool Player::_NegotiateTrack(std::string* error)
+{
 	if (fImpl->file->InitCheck() != B_OK) {
 		if (error != nullptr)
 			*error = std::string("无法识别该文件: ")
@@ -133,6 +134,35 @@ bool Player::Load(const std::string& path, std::string* error)
 	if (error != nullptr)
 		*error = "没有可解码的音频轨";
 	return false;
+}
+
+bool Player::Load(const std::string& path, std::string* error)
+{
+	Stop();
+
+	if (fImpl->track != nullptr && fImpl->file != nullptr)
+		fImpl->file->ReleaseTrack(fImpl->track);
+	fImpl->track = nullptr;
+	delete fImpl->file;
+	fImpl->file = nullptr;
+	delete fImpl->source;
+	fImpl->source = nullptr;
+
+	BEntry entry(path.c_str(), true);
+	entry_ref ref;
+	if (entry.InitCheck() != B_OK || entry.GetRef(&ref) != B_OK) {
+		if (error != nullptr)
+			*error = "文件不存在: " + path;
+		return false;
+	}
+
+	// 换歌必须把渲染计数清零，否则时间会从上一首累计
+	fImpl->framesRendered = 0;
+	fImpl->finished = false;
+	fImpl->peak = 0.0f;
+
+	fImpl->file = new BMediaFile(&ref);
+	return _NegotiateTrack(error);
 }
 
 bool Player::_StartOutput(std::string* error)

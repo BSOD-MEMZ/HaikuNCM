@@ -74,7 +74,11 @@ void SongItem::DrawItem(BView* owner, BRect frame, bool complete)
 
 	owner->PushState();
 
-	owner->SetHighColor(selected ? SelectionBackground() : Background());
+	// 奇偶行斑马纹（Haiku 列表令牌：底色 tint 加深一档），选中色优先
+	rgb_color row = Background();
+	if (!selected && (fIndex % 2) == 1)
+		row = tint_color(row, B_DARKEN_1_TINT);
+	owner->SetHighColor(selected ? SelectionBackground() : row);
 	owner->FillRect(frame);
 
 	const rgb_color primary = selected ? SelectedText() : Text();

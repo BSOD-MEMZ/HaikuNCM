@@ -19,6 +19,7 @@ class BSlider;
 class SeekSlider;
 class BStringView;
 class BTextControl;
+class PlaylistWindow;
 class SongHeader;
 class UserMenuItem;
 class TransportButton;
@@ -76,6 +77,7 @@ private:
 	void _CyclePlayMode();
 	void _ToggleLike();
 	void _OpenPlaylist();
+	void _SyncPlaylist();
 	void _UpdateModeLabel();
 
 	static int32 _SearchThread(void* data);
@@ -114,6 +116,8 @@ private:
 	std::vector<ncm::Song> fSongs;
 	ncm::NeteaseApi* fApi = nullptr;
 	BString fKeyword;
+
+	PlaylistWindow* fPlaylistWindow = nullptr;
 
 	volatile bool fQuitting = false;
 	volatile bool fBusy = false;

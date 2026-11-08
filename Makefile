@@ -17,7 +17,7 @@ $(BUILD_DIR)/HaikuNCM: $(NET_SRC) $(UI_SRC) src/main.cpp third_party/nlohmann/js
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) $(UI_SRC) src/main.cpp $(THIRD_SRC) -lbe -lmedia -ltranslation -llocalestub $(LDLIBS)
 
 $(BUILD_DIR)/ncmcli: $(NET_SRC) tools/ncmcli.cpp third_party/nlohmann/json.hpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) tools/ncmcli.cpp $(LDLIBS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(NET_SRC) tools/ncmcli.cpp -lbe $(LDLIBS)
 
 $(BUILD_DIR)/audiotest: tools/audiotest.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ tools/audiotest.cpp -lmedia -lbe -lroot

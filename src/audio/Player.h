@@ -3,6 +3,8 @@
 
 #include <string>
 
+class BPositionIO;
+
 namespace ncm {
 
 // Thin wrapper around BMediaFile/BMediaTrack/BSoundPlayer.
@@ -15,6 +17,8 @@ public:
 	~Player();
 
 	bool Load(const std::string& path, std::string* error);
+	// 流式：BPositionIO 所有权交给 Player，负责释放
+	bool LoadStream(BPositionIO* source, std::string* error);
 	bool Play(std::string* error);
 	void Stop();
 
@@ -32,6 +36,7 @@ public:
 
 private:
 	bool _StartOutput(std::string* error);
+	bool _NegotiateTrack(std::string* error);
 
 	struct Impl;
 	Impl* fImpl;

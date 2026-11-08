@@ -17,8 +17,9 @@ enum {
 // 当前播放队列（就是这次搜索的结果），双击切歌。
 class PlaylistWindow : public BWindow {
 public:
-	PlaylistWindow(BMessenger target, const std::vector<ncm::Song>& songs,
-		int32 current);
+	PlaylistWindow(BMessenger target);
+
+	void Update(const std::vector<ncm::Song>& songs, int32 current);
 
 	void MessageReceived(BMessage* message) override;
 	bool QuitRequested() override;

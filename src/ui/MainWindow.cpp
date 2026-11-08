@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "ListMetrics.h"
+#include "net/HttpRangeSource.h"
 #include "LoginWindow.h"
 #include "PlaylistWindow.h"
 #include "SongHeader.h"
@@ -370,6 +371,28 @@ void MainWindow::MessageReceived(BMessage* message)
 			if (message->FindString("text", &text) == B_OK)
 				fStatus->SetText(text);
 
+			BPositionIO* source = nullptr;
+			if (message->FindPointer("source", reinterpret_cast<void**>(&source)) == B_OK
+				&& source != nullptr) {
+				std::string streamError;
+				std::string error;
+				if (!fPlayer->LoadStream(source, &streamError)) {
+					fStatus->SetText(Prefixed(B_TRANSLATE("解码失败: "), streamError));
+				} else {
+					fSeek->SetEnabled(true);
+					if (fPlayer->Play(&error)) {
+						fPlayButton->SetKind(TransportButton::kPause);
+						_SyncPlaylist();
+					} else {
+						fPlayButton->SetKind(TransportButton::kPlay);
+						fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
+					}
+					_UpdateTransport();
+				}
+				fBusy = false;
+				return;
+			}
+
 			const char* path = nullptr;
 			if (message->FindString("path", &path) == B_OK) {
 				fCurrentIndex = fResults->CurrentSelection();
@@ -381,6 +404,19 @@ void MainWindow::MessageReceived(BMessage* message)
 					fSeek->SetEnabled(true);
 					if (fPlayer->Play(&error)) {
 						fPlayButton->SetKind(TransportButton::kPause);
+
+						// fee=1 的歌服务器只给 30s 试听片段，提示一下
+						fLock.Lock();
+						const bool vipPreview =
+							static_cast<size_t>(fCurrentIndex) < fSongs.size()
+							&& fSongs[fCurrentIndex].fee == 1;
+						fLock.Unlock();
+						if (vipPreview) {
+							BString note(B_TRANSLATE("正在播放"));
+							note << B_TRANSLATE("（VIP 试听 30 秒）");
+							fStatus->SetText(note.String());
+						}
+						_SyncPlaylist();
 					} else {
 						fPlayButton->SetKind(TransportButton::kPlay);
 						fStatus->SetText(Prefixed(B_TRANSLATE("没有音频输出设备: "), error));
@@ -620,6 +656,7 @@ void MainWindow::_FillResults()
 	status << "找到 " << count << " 首（双击播放）";
 	fStatus->SetText(status.String());
 
+	_SyncPlaylist();
 	_StartCoverDownload();
 
 	if (fPendingPlay >= 0) {
@@ -743,12 +780,27 @@ int32 MainWindow::_PlayThread(void* data)
 	struct stat info;
 	const bool cached = stat(path.c_str(), &info) == 0
 		&& info.st_size == audio.size;
-	if (!cached) {
-		if (!self->fApi->DownloadAudio(audio, path, &error)) {
-			result.AddString("text", Prefixed(B_TRANSLATE("下载失败: "), error));
-			self->_PostIfAlive(&result);
-			return 0;
-		}
+
+	if (cached) {
+		result.AddString("path", path.c_str());
+		self->_PostIfAlive(&result);
+		return 0;
+	}
+
+	// 流式优先：BMediaFile 直接吃 HTTP Range 数据源，边下边播
+	auto* source = new HttpRangeSource(audio.url, audio.size, &error);
+	if (source->Ok()) {
+		result.AddPointer("source", source);
+		self->_PostIfAlive(&result);
+		return 0;
+	}
+	delete source;
+
+	// 回退：CDN 不支持 Range（少见）就整曲下载
+	if (!self->fApi->DownloadAudio(audio, path, &error)) {
+		result.AddString("text", Prefixed(B_TRANSLATE("下载失败: "), error));
+		self->_PostIfAlive(&result);
+		return 0;
 	}
 
 	result.AddString("path", path.c_str());
@@ -826,7 +878,23 @@ void MainWindow::_OpenPlaylist()
 	std::vector<ncm::Song> songs = fSongs;
 	fLock.Unlock();
 
-	(new PlaylistWindow(BMessenger(this), songs, fCurrentIndex))->Show();
+	if (fPlaylistWindow == nullptr)
+		fPlaylistWindow = new PlaylistWindow(BMessenger(this));
+	fPlaylistWindow->Update(songs, fCurrentIndex);
+	fPlaylistWindow->Show();
+	fPlaylistWindow->Activate();
+}
+
+void MainWindow::_SyncPlaylist()
+{
+	if (fPlaylistWindow == nullptr)
+		return;
+
+	fLock.Lock();
+	std::vector<ncm::Song> songs = fSongs;
+	fLock.Unlock();
+
+	fPlaylistWindow->Update(songs, fCurrentIndex);
 }
 
 void MainWindow::_UpdateTransport()
