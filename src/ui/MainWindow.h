@@ -24,6 +24,7 @@ class PlaylistWindow;
 class NowPlayingBadge;
 class NowPlayingWindow;
 class SongListView;
+class BCardView;
 class BTabView;
 class SongHeader;
 class BMenu;
@@ -75,6 +76,7 @@ public:
 	void PlayIndex(int32 index);
 
 	void MessageReceived(BMessage* message) override;
+	void FrameResized(float width, float height) override;
 	bool QuitRequested() override;
 
 private:
@@ -122,6 +124,8 @@ private:
 	BListView* fGenericList = nullptr;
 	std::vector<ncm::GenericItem> fGenericItems;
 	int32 fSearchType = 1;
+	bool fTabsReady = false;
+	BCardView* fContentHost = nullptr;
 	std::string fCacheDir;
 
 	NowPlayingBadge* fNowBadge = nullptr;

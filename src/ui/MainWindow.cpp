@@ -14,8 +14,10 @@
 #include <Catalog.h>
 #include <Bitmap.h>
 #include <Button.h>
+#include <CardView.h>
 #include <LayoutBuilder.h>
 #include <ListView.h>
+#include <GroupView.h>
 #include <Menu.h>
 #include <MenuBar.h>
 #include <MenuItem.h>
@@ -140,6 +142,22 @@ std::string FormatTime(double seconds)
 
 } // namespace
 
+// beta6 的 BTabView 没有选择消息 API，重写 Select() 自己发
+class SearchTabView : public BTabView {
+public:
+	SearchTabView(const char* name)
+		: BTabView(name, B_WIDTH_FROM_LABEL)
+	{
+	}
+
+	void Select(int32 index) override
+	{
+		BTabView::Select(index);
+		if (Window() != nullptr)
+			Window()->PostMessage(kMessageSearchTab);
+	}
+};
+
 MainWindow::MainWindow()
 	: BWindow(BRect(80, 80, 880, 660), "HaikuNCM", B_TITLED_WINDOW,
 		  B_QUIT_ON_WINDOW_CLOSE)
@@ -150,8 +168,8 @@ MainWindow::MainWindow()
 
 	fMenuBar = new BMenuBar("menubar");
 	_BuildMenu();
-
 	fUserMenuBar = new BMenuBar("user-menubar");
+	fUserItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
 	fUserMenu = new BMenu(B_TRANSLATE("未登录"));
 	fUserMenu->AddItem(fUserItem);
 	BMenuItem* logoutItem = new BMenuItem(B_TRANSLATE("退出登录"),
@@ -164,7 +182,6 @@ MainWindow::MainWindow()
 		fMenuBar->MaxSize().height));
 
 	// 登录菜单：照抄 HaikuDepot —— 主菜单栏 + 右侧等高的用户菜单栏
-	fUserItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
 
 	fSearchField = new BTextControl("search", B_TRANSLATE("搜索"), "",
 		new BMessage(kMessageSearch));
@@ -224,6 +241,30 @@ MainWindow::MainWindow()
 	fVolumeLabel = new BStringView("volume-label", "100%");
 	fStatus = new BStringView("status", B_TRANSLATE("输入关键词开始搜索"));
 
+	// 聚合搜索类目 tab：单曲/歌词走歌曲表，其余走通用列表
+	fSearchTabs = new SearchTabView("search-tabs");
+	static const char* kTabNames[7] = {
+		B_TRANSLATE("单曲"), B_TRANSLATE("歌单"), B_TRANSLATE("专辑"),
+		B_TRANSLATE("歌手"), B_TRANSLATE("用户"), B_TRANSLATE("歌词"),
+		B_TRANSLATE("声音"),
+	};
+	for (int32 i = 0; i < 7; i++) {
+		BGroupView* card = new BGroupView("card", B_VERTICAL, 0.0f);
+		card->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+		BTab* tab = new BTab();
+		fSearchTabs->AddTab(card, tab);
+		tab->SetLabel(kTabNames[i]);
+		fCards[i] = card;
+	}
+
+	fContentHost = new BCardView();
+	fContentHost->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
+	fResults->SetResizingMode(B_FOLLOW_ALL_SIDES);
+	fGenericList->SetResizingMode(B_FOLLOW_ALL_SIDES);
+	fContentHost->CardLayout()->AddView(fResults);
+	fContentHost->CardLayout()->AddView(fGenericList);
+	fContentHost->CardLayout()->SetVisibleItem(0);
+
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 		.AddGroup(B_HORIZONTAL, 0)
 			.Add(fMenuBar, 1.0f)
@@ -236,7 +277,7 @@ MainWindow::MainWindow()
 				.Add(fSearchButton)
 			.End()
 			.Add(fSearchTabs)
-			.Add(fResults)
+			.Add(fContentHost, 1.0f)
 			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
 				.Add(fNowBadge)
 				.AddGlue()
@@ -342,6 +383,9 @@ void MainWindow::MessageReceived(BMessage* message)
 
 		case kMessageSearchTab:
 		{
+			if (!fTabsReady)
+				return;
+
 			static const int32 kTypes[7] = {1, 1000, 10, 100, 1002, 1006,
 				1009};
 			const int32 tab = fSearchTabs->Selection();
@@ -740,10 +784,10 @@ void MainWindow::MessageReceived(BMessage* message)
 				fApi->SetCookie(cookie);
 				SaveSession(cookie, nickname);
 
-				BString label("使用 ");
-				label << nickname << " 登录";
-				fUserItem->SetLabel(label.String());
-				fUserItem->SetEnabled(false);
+				BString label(B_TRANSLATE("使用 "));
+				label << nickname;
+				fUserMenu->Superitem()->SetLabel(label.String());
+				fLogoutItem->SetEnabled(true);
 
 				BString status("已登录: ");
 				status << nickname;
@@ -774,6 +818,12 @@ void MainWindow::MessageReceived(BMessage* message)
 			BWindow::MessageReceived(message);
 			return;
 	}
+}
+
+void MainWindow::FrameResized(float width, float height)
+{
+	BWindow::FrameResized(width, height);
+	_SwitchSearchCard();
 }
 
 bool MainWindow::QuitRequested()
@@ -857,8 +907,9 @@ void MainWindow::_FillResults()
 
 	fLock.Lock();
 	const size_t count = fSongs.size();
-	for (size_t i = 0; i < count; i++)
+	for (size_t i = 0; i < count; i++) {
 		fResults->AddRow(new SongRow(fSongs[i]));
+	}
 	fLock.Unlock();
 
 	fBusy = false;
@@ -1029,7 +1080,7 @@ void MainWindow::_ApplyCovers()
 		BBitmap* bitmap = BTranslationUtils::GetBitmapFile(path.c_str());
 		if (bitmap != nullptr) {
 			row->SetCover(bitmap);
-			fResults->InvalidateRow(row);
+				fResults->InvalidateRow(row);
 		}
 	}
 }
@@ -1219,27 +1270,11 @@ void MainWindow::_OpenPlaylist()
 
 void MainWindow::_SwitchSearchCard()
 {
-	// 内容视图在两张卡片间搬移：歌曲表（单曲/歌词）与通用列表
-	BView* content = nullptr;
-	if (fSearchType == 1 || fSearchType == 1006)
-		content = fResults;
-	else
-		content = fGenericList;
-
-	for (int32 i = 0; i < 7; i++) {
-		if (fCards[i] == nullptr || fCards[i] == content)
-			continue;
-		if (content->Parent() == fCards[i])
-			fCards[i]->RemoveChild(content);
-	}
-
-	BView* selected = fCards[fSearchTabs->Selection()];
-	if (selected != nullptr && content->Parent() != selected) {
-		selected->AddChild(content);
-		content->MoveTo(0.0f, 0.0f);
-		content->ResizeTo(selected->Bounds().Width(),
-			selected->Bounds().Height());
-	}
+	// 单曲/歌词显示歌曲表，其余显示通用列表；BCardLayout 负责 N 选 1
+	const bool songVisible = fSearchType == 1 || fSearchType == 1006;
+	BView* content = songVisible ? static_cast<BView*>(fResults)
+								 : static_cast<BView*>(fGenericList);
+	fContentHost->CardLayout()->SetVisibleItem(songVisible ? 0 : 1);
 }
 
 void MainWindow::_FillGeneric()

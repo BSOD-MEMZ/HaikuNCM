@@ -166,6 +166,10 @@ PlaylistWindow::PlaylistWindow(BMessenger target)
 void PlaylistWindow::Update(const std::vector<ncm::Song>& songs,
 	int32 current)
 {
+	// 主窗口线程会直接调这里（跨 looper），必须持锁操作子视图
+	if (!Lock())
+		return;
+
 	fSongs = songs;
 
 	fList->MakeEmpty();
@@ -183,6 +187,8 @@ void PlaylistWindow::Update(const std::vector<ncm::Song>& songs,
 		fList->Select(current, false);
 		fList->ScrollToSelection();
 	}
+
+	Unlock();
 }
 
 void PlaylistWindow::_Rebuild()
