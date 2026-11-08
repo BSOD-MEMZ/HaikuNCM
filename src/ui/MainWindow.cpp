@@ -42,6 +42,9 @@ namespace {
 
 using ncm::AudioPath;
 using ncm::BigCoverPath;
+using ncm::CommentsPath;
+using ncm::RomajiPath;
+using ncm::TranslationPath;
 using ncm::CacheDir;
 using ncm::CoverPath;
 using ncm::LyricPath;
@@ -58,12 +61,14 @@ BString Prefixed(const char* prefix, const std::string& detail)
 	return text;
 }
 
-void SaveSession(const std::string& cookie, const std::string& nickname)
+void SaveSession(const std::string& cookie, const std::string& nickname,
+	long long userId)
 {
 	FILE* file = fopen(SessionPath().c_str(), "w");
 	if (file == nullptr)
 		return;
-	fprintf(file, "%s\n%s\n", nickname.c_str(), cookie.c_str());
+	fprintf(file, "%s\n%s\n%lld\n", nickname.c_str(), cookie.c_str(),
+		userId);
 	fclose(file);
 }
 
@@ -77,7 +82,8 @@ void TrimLine(char* text)
 	}
 }
 
-bool LoadSession(std::string* cookie, std::string* nickname)
+bool LoadSession(std::string* cookie, std::string* nickname,
+	long long* userId)
 {
 	FILE* file = fopen(SessionPath().c_str(), "r");
 	if (file == nullptr)
@@ -85,17 +91,22 @@ bool LoadSession(std::string* cookie, std::string* nickname)
 
 	char nicknameBuffer[256] = { 0 };
 	char cookieBuffer[2048] = { 0 };
+	char uidBuffer[64] = { 0 };
 	const bool ok = fgets(nicknameBuffer, sizeof(nicknameBuffer), file) != nullptr
 		&& fgets(cookieBuffer, sizeof(cookieBuffer), file) != nullptr;
+	fgets(uidBuffer, sizeof(uidBuffer), file); // 老版本没有第三行
 	fclose(file);
 	if (!ok)
 		return false;
 
 	TrimLine(nicknameBuffer);
 	TrimLine(cookieBuffer);
+	TrimLine(uidBuffer);
 
 	*nickname = nicknameBuffer;
 	*cookie = cookieBuffer;
+	if (userId != nullptr)
+		*userId = atoll(uidBuffer);
 	return !cookie->empty();
 }
 
@@ -114,6 +125,13 @@ struct GenericJob {
 	MainWindow* window;
 	int32 slot;
 	BString keyword;
+};
+
+// 播放任务：音质在起播那一刻定下来，线程里不再读窗口成员
+struct PlayJob {
+	MainWindow* window;
+	int32 index;
+	std::string level;
 };
 
 } // namespace
@@ -151,20 +169,26 @@ MainWindow::MainWindow()
 	_BuildContent();
 	_BuildTransport();
 
+	// 布局权重：只有内容区（和里面的列表）吃多余空间，
+	// 菜单栏行、搜索行、底部底板都是 0，窗口拉大才不会被它们抢走位置
+	fSearchRow = new BGroupView("search-row", B_HORIZONTAL,
+		B_USE_DEFAULT_SPACING);
+	BLayoutBuilder::Group<>(fSearchRow, B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+		.Add(fSearchField)
+		.Add(fSearchButton)
+		.End();
+
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
-		.AddGroup(B_HORIZONTAL, 0)
+		.AddGroup(B_HORIZONTAL, 0, 0.0f)
 			.Add(fMenuBar, 1.0f)
 			.Add(fUserMenuBar, 0.0f)
 			.End()
-		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
+		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING, 1.0f)
 			.SetInsets(B_USE_WINDOW_INSETS)
-			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
-				.Add(fSearchField)
-				.Add(fSearchButton)
-				.End()
+			.Add(fSearchRow, 0.0f)
 			.Add(fContentHost, 1.0f)
 			.End()
-		.Add(fTransport)
+		.Add(fTransport, 0.0f)
 		.End();
 
 	SetSizeLimits(760, 4000, 420, 4000);
@@ -176,12 +200,14 @@ MainWindow::MainWindow()
 
 	std::string cookie;
 	std::string nickname;
-	if (LoadSession(&cookie, &nickname) && !cookie.empty()) {
+	if (LoadSession(&cookie, &nickname, &fUserId) && !cookie.empty()) {
 		fApi->SetCookie(cookie);
 		BString label(B_TRANSLATE("使用 "));
 		label << nickname.c_str();
 		fUserMenu->Superitem()->SetLabel(label.String());
 		fLogoutItem->SetEnabled(true);
+		// 红心状态和歌单要联网拿，后台跑
+		_FetchAccountInfo();
 	}
 }
 
@@ -203,6 +229,16 @@ void MainWindow::_BuildMenu()
 	BMenuItem* nowPlaying = new BMenuItem(B_TRANSLATE("正在播放"),
 		new BMessage(kMessageToggleNowPlaying), 'P');
 	musicMenu->AddItem(nowPlaying);
+	musicMenu->AddSeparatorItem();
+
+	fMyPlaylistMenu = new BMenu(B_TRANSLATE("我的歌单"));
+	_RebuildPlaylistMenu();
+	musicMenu->AddItem(fMyPlaylistMenu);
+
+	fQualityMenu = new BMenu(B_TRANSLATE("音质"));
+	_BuildQualityMenu(fQualityMenu);
+	musicMenu->AddItem(fQualityMenu);
+
 	musicMenu->AddSeparatorItem();
 	musicMenu->AddItem(new BMenuItem(B_TRANSLATE("播放列表…"),
 		new BMessage(kMessagePlaylist), 'L'));
@@ -244,8 +280,12 @@ void MainWindow::_BuildContent()
 	};
 
 	for (int32 i = 1; i < kTabCount; i++) {
+		// 第 3 个参数是 flags 不是 border：B_PLAIN_BORDER 值为 0，
+		// 当 flags 传进来就把 B_WILL_DRAW 清了，列表整个不画东西
+		// 第三个参数是 flags：别把 B_PLAIN_BORDER（值为 0）当 flags 传进去，
+		// 那样 B_WILL_DRAW 被清掉，列表整个不画东西
 		BListView* list = new BListView("generic", B_SINGLE_SELECTION_LIST,
-			B_PLAIN_BORDER);
+			B_WILL_DRAW | B_FRAME_EVENTS | B_NAVIGABLE);
 		list->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
 		list->SetInvocationMessage(new BMessage(kMessageGenericOpen));
 		BGroupView* card = new BGroupView("card", B_VERTICAL, 0.0f);
@@ -548,6 +588,29 @@ void MainWindow::MessageReceived(BMessage* message)
 			return;
 		}
 
+		case kMessageDebugTab:
+		{
+			int32 index = 0;
+			if (message->FindInt32("index", &index) != B_OK)
+				return;
+			// >= 10 表示切播放页内部的页签（10 歌词 / 11 评论）
+			if (index >= 10)
+				fNowView->SelectTab(index - 10);
+			else
+				fSearchTabs->Select(index);
+			return;
+		}
+
+		case kMessageDebugResize:
+		{
+			int32 width = 0;
+			int32 height = 0;
+			message->FindInt32("width", &width);
+			message->FindInt32("height", &height);
+			ResizeBy(width, height);
+			return;
+		}
+
 		case kMessageToggleNowPlaying:
 			_ToggleNowPlaying();
 			return;
@@ -558,24 +621,36 @@ void MainWindow::MessageReceived(BMessage* message)
 
 		case kMessageNowPlayingReady:
 		{
-			const char* title = nullptr;
-			const char* artist = nullptr;
-			const char* cover = nullptr;
-			const char* lrc = nullptr;
-			if (message->FindString("title", &title) != B_OK)
+			int64 id = 0;
+			if (message->FindInt64("id", &id) != B_OK)
 				return;
-			message->FindString("artist", &artist);
-			message->FindString("cover", &cover);
-			message->FindString("lrc", &lrc);
 
-			BBitmap* mini = BTranslationUtils::GetBitmapFile(cover);
-			fNowBadge->SetInfo(title, artist != nullptr ? artist : "", mini);
-
-			if (fNowView != nullptr) {
-				fNowView->SetNowPlaying(title,
-					artist != nullptr ? artist : "",
-					cover != nullptr ? cover : "", lrc != nullptr ? lrc : "");
+			ncm::Song song;
+			fLock.Lock();
+			for (const ncm::Song& candidate : fSongs) {
+				if (candidate.id == id) {
+					song = candidate;
+					break;
+				}
 			}
+			fLock.Unlock();
+			if (song.id == 0)
+				return;
+
+			_PushNowPlaying(song);
+			return;
+		}
+
+		case kMessageOpenArtist:
+		case kMessageOpenAlbum:
+		{
+			int64 id = 0;
+			if (message->FindInt64("id", &id) != B_OK || id <= 0)
+				return;
+			if (message->what == kMessageOpenArtist)
+				ShowArtist(id, "");
+			else
+				ShowAlbum(id, "");
 			return;
 		}
 
@@ -774,6 +849,51 @@ void MainWindow::MessageReceived(BMessage* message)
 			_CyclePlayMode();
 			return;
 
+		case kMessageQuality:
+		{
+			const char* level = nullptr;
+			if (message->FindString("level", &level) != B_OK || level == nullptr)
+				return;
+			fQuality = level;
+			for (int32 i = 0; i < fQualityMenu->CountItems(); i++) {
+				BMenuItem* item = fQualityMenu->ItemAt(i);
+				const char* value = nullptr;
+				if (item != nullptr && item->Message() != nullptr
+					&& item->Message()->FindString("level", &value) == B_OK)
+					item->SetMarked(fQuality == value);
+			}
+			return;
+		}
+
+		case kMessageAccountDone:
+			_ApplyAccount(message);
+			return;
+
+		case kMessageOpenUserPlaylist:
+		{
+			int64 id = 0;
+			if (message->FindInt64("id", &id) != B_OK || id <= 0)
+				return;
+			if (fBusy)
+				return;
+
+			fBusy = true;
+			BMessage request(kMessageGenericOpen);
+			request.AddInt32("kind", 1000);
+			request.AddInt64("id", id);
+			auto* payload = new std::pair<MainWindow*, BMessage>(this,
+				request);
+			thread_id thread = spawn_thread(_DetailThread, "ncm-detail",
+				B_NORMAL_PRIORITY, payload);
+			if (thread < B_OK) {
+				delete payload;
+				fBusy = false;
+				return;
+			}
+			resume_thread(thread);
+			return;
+		}
+
 		case kMessageLike:
 			_ToggleLike();
 			return;
@@ -891,12 +1011,15 @@ void MainWindow::MessageReceived(BMessage* message)
 			if (message->FindString("nickname", &nickname) == B_OK
 				&& message->FindString("cookie", &cookie) == B_OK) {
 				fApi->SetCookie(cookie);
-				SaveSession(cookie, nickname);
+				SaveSession(cookie, nickname, fUserId);
 
 				BString label(B_TRANSLATE("使用 "));
 				label << nickname;
 				fUserMenu->Superitem()->SetLabel(label.String());
 				fLogoutItem->SetEnabled(true);
+
+				// 红心状态 + 我的歌单
+				_FetchAccountInfo();
 			}
 			return;
 		}
@@ -906,6 +1029,11 @@ void MainWindow::MessageReceived(BMessage* message)
 			remove(SessionPath().c_str());
 			fUserMenu->Superitem()->SetLabel(B_TRANSLATE("未登录"));
 			fLogoutItem->SetEnabled(false);
+			fUserId = 0;
+			fLikedIds.clear();
+			fPlaylists.clear();
+			_ApplyLikes();
+			_RebuildPlaylistMenu();
 			return;
 
 		case kMessageAbout:
@@ -1065,6 +1193,7 @@ void MainWindow::_FillResults()
 	fSongReady = true;
 	fSearchButton->SetEnabled(true);
 
+	_ApplyLikes();
 	_SyncPlaylist();
 	_StartCoverDownload();
 
@@ -1196,20 +1325,40 @@ int32 MainWindow::_NowPlayingThread(void* data)
 	if (stat(coverPath.c_str(), &info) != 0 || info.st_size < 4096)
 		self->fApi->DownloadCover(coverUrl, coverPath, &error);
 
+	// 歌词三层：原文 / 翻译 / 罗马音，各自落盘（播放页直接读文件）
 	std::string lrc;
-	self->fApi->FetchLyric(song.id, &lrc, &error);
-	const std::string lrcPath = LyricPath(song.id);
-	FILE* file = fopen(lrcPath.c_str(), "w");
-	if (file != nullptr) {
-		fwrite(lrc.data(), 1, lrc.size(), file);
+	std::string translation;
+	std::string romaji;
+	self->fApi->FetchLyric(song.id, &lrc, &translation, &romaji, &error);
+
+	const auto writeFile = [](const std::string& path, const std::string& text) {
+		FILE* file = fopen(path.c_str(), "w");
+		if (file == nullptr)
+			return;
+		if (!text.empty())
+			fwrite(text.data(), 1, text.size(), file);
 		fclose(file);
+	};
+	writeFile(LyricPath(song.id), lrc);
+	writeFile(TranslationPath(song.id), translation);
+	writeFile(RomajiPath(song.id), romaji);
+
+	// 评论：格式化成纯文本，播放页的评论页签直接显示
+	std::vector<ncm::Comment> comments;
+	BString commentText;
+	if (self->fApi->FetchComments(song.id, 30, 0, &comments, &error)) {
+		for (const ncm::Comment& comment : comments) {
+			commentText << comment.nickname.c_str();
+			if (comment.likedCount > 0)
+				commentText << "  ·  " << comment.likedCount
+							<< B_TRANSLATE(" 赞");
+			commentText << "\n" << comment.content.c_str() << "\n\n";
+		}
 	}
+	writeFile(CommentsPath(song.id), std::string(commentText.String()));
 
 	BMessage ready(kMessageNowPlayingReady);
-	ready.AddString("title", song.name.c_str());
-	ready.AddString("artist", song.artist.c_str());
-	ready.AddString("cover", coverPath.c_str());
-	ready.AddString("lrc", lrcPath.c_str());
+	ready.AddInt64("id", song.id);
 	self->_PostIfAlive(&ready);
 	return 0;
 }
@@ -1261,7 +1410,7 @@ void MainWindow::_StartPlay(int32 index)
 	}
 	fBusy = true;
 
-	auto* payload = new std::pair<MainWindow*, int32>(this, index);
+	auto* payload = new PlayJob{this, index, fQuality};
 	thread_id thread = spawn_thread(_PlayThread, "ncm-play", B_NORMAL_PRIORITY,
 		payload);
 	if (thread < B_OK) {
@@ -1274,9 +1423,10 @@ void MainWindow::_StartPlay(int32 index)
 
 int32 MainWindow::_PlayThread(void* data)
 {
-	auto* payload = static_cast<std::pair<MainWindow*, int32>*>(data);
-	MainWindow* self = payload->first;
-	const int32 index = payload->second;
+	auto* payload = static_cast<PlayJob*>(data);
+	MainWindow* self = payload->window;
+	const int32 index = payload->index;
+	const std::string level = payload->level;
 	delete payload;
 
 	self->fLock.Lock();
@@ -1294,7 +1444,8 @@ int32 MainWindow::_PlayThread(void* data)
 
 	ncm::AudioUrl audio;
 	std::string error;
-	if (!self->fApi->SongUrl(song.id, "standard", &audio, &error)) {
+	if (!self->fApi->SongUrl(song.id,
+			level.empty() ? "standard" : level, &audio, &error)) {
 		result.AddString("text", Prefixed(B_TRANSLATE("取流失败: "), error).String());
 		self->_PostIfAlive(&result);
 		return 0;
@@ -1392,6 +1543,20 @@ void MainWindow::_ToggleLike()
 	fHeartButton->SetKind(fLiked ? TransportButton::kHeartFilled
 								 : TransportButton::kHeart);
 	fHeartButton->Invalidate();
+
+	if (fLiked)
+		fLikedIds.insert(static_cast<long long>(id));
+	else
+		fLikedIds.erase(static_cast<long long>(id));
+
+	const int32 rows = fResults->CountRows(nullptr);
+	for (int32 i = 0; i < rows; i++) {
+		auto* row = static_cast<SongRow*>(fResults->RowAt(i, nullptr));
+		if (row != nullptr && row->Song().id == id) {
+			row->SetLiked(fLiked);
+			fResults->InvalidateRow(row);
+		}
+	}
 }
 
 void MainWindow::_OpenPlaylist()
@@ -1415,7 +1580,17 @@ void MainWindow::_ToggleNowPlaying()
 void MainWindow::_ShowNowPlayingPage(bool show)
 {
 	fShowingNow = show;
+
+	// 先收起/放出搜索行，再切卡片：反过来会先按旧位置画一遍，
+	// 挪上去之后旧位置的像素没人擦，屏幕上就出现两份内容
+	if (fSearchRow != nullptr) {
+		if (show)
+			fSearchRow->Hide();
+		else
+			fSearchRow->Show();
+	}
 	fContentHost->CardLayout()->SetVisibleItem(show ? 1 : 0);
+	fContentHost->Invalidate();
 	if (!show)
 		return;
 
@@ -1429,11 +1604,25 @@ void MainWindow::_ShowNowPlayingPage(bool show)
 	if (!valid)
 		return;
 
-	const std::string coverPath = BigCoverPath(song.id);
-	const std::string lrcPath = LyricPath(song.id);
-	fNowView->SetNowPlaying(song.name.c_str(), song.artist.c_str(),
-		coverPath.c_str(), lrcPath.c_str());
+	_PushNowPlaying(song);
 	_StartNowPlayingThread();
+}
+
+void MainWindow::_PushNowPlaying(const ncm::Song& song)
+{
+	if (song.id == 0)
+		return;
+
+	const std::string coverPath = BigCoverPath(song.id);
+	BBitmap* mini = BTranslationUtils::GetBitmapFile(coverPath.c_str());
+	if (mini == nullptr)
+		mini = BTranslationUtils::GetBitmapFile(CoverPath(song.id).c_str());
+	fNowBadge->SetInfo(song.name.c_str(), song.artist.c_str(), mini);
+
+	fNowView->SetSong(song.name.c_str(), song.artist.c_str(), song.artistId,
+		song.album.c_str(), song.albumId, coverPath.c_str(),
+		LyricPath(song.id).c_str(), TranslationPath(song.id).c_str(),
+		RomajiPath(song.id).c_str(), CommentsPath(song.id).c_str());
 }
 
 void MainWindow::_StartNowPlayingThread()
@@ -1506,6 +1695,179 @@ void MainWindow::_UpdateTransport()
 
 	if (fShowingNow)
 		fNowView->SetPosition(position);
+}
+
+void MainWindow::_BuildQualityMenu(BMenu* parent)
+{
+	static const struct {
+		const char* label;
+		const char* level;
+	} kLevels[] = {
+		{ B_TRANSLATE("标准"), "standard" },
+		{ B_TRANSLATE("较高"), "higher" },
+		{ B_TRANSLATE("极高"), "exhigh" },
+		{ B_TRANSLATE("无损"), "lossless" },
+	};
+
+	for (const auto& entry : kLevels) {
+		BMessage* message = new BMessage(kMessageQuality);
+		message->AddString("level", entry.level);
+		BMenuItem* item = new BMenuItem(entry.label, message);
+		item->SetMarked(fQuality == entry.level);
+		parent->AddItem(item);
+	}
+	parent->SetTargetForItems(this);
+}
+
+void MainWindow::_RebuildPlaylistMenu()
+{
+	if (fMyPlaylistMenu == nullptr)
+		return;
+
+	while (fMyPlaylistMenu->CountItems() > 0)
+		delete fMyPlaylistMenu->RemoveItem((int32)0);
+
+	if (fPlaylists.empty()) {
+		BMenuItem* empty = new BMenuItem(
+			fUserId > 0 ? B_TRANSLATE("（没有歌单）")
+						: B_TRANSLATE("（登录后显示）"),
+			nullptr);
+		empty->SetEnabled(false);
+		fMyPlaylistMenu->AddItem(empty);
+		return;
+	}
+
+	for (const ncm::PlaylistInfo& playlist : fPlaylists) {
+		BString label(playlist.name.c_str());
+		if (playlist.trackCount > 0)
+			label << " (" << playlist.trackCount << ")";
+		BMessage* message = new BMessage(kMessageOpenUserPlaylist);
+		message->AddInt64("id", playlist.id);
+		message->AddString("name", playlist.name.c_str());
+		fMyPlaylistMenu->AddItem(new BMenuItem(label.String(), message));
+	}
+	fMyPlaylistMenu->SetTargetForItems(this);
+}
+
+void MainWindow::_FetchAccountInfo()
+{
+	if (!fApi->IsLoggedIn())
+		return;
+
+	auto* job = new std::pair<MainWindow*, long long>(this, fUserId);
+	thread_id thread = spawn_thread(_AccountThread, "ncm-account",
+		B_LOW_PRIORITY, job);
+	if (thread < B_OK) {
+		delete job;
+		return;
+	}
+	resume_thread(thread);
+}
+
+int32 MainWindow::_AccountThread(void* data)
+{
+	auto* job = static_cast<std::pair<MainWindow*, long long>*>(data);
+	MainWindow* self = job->first;
+	const long long uid = job->second;
+	delete job;
+
+	ncm::NeteaseApi api;
+	std::string error;
+
+	BMessage done(kMessageAccountDone);
+
+	long long userId = uid;
+	std::string nickname;
+	if (api.FetchAccount(&userId, &nickname, &error)) {
+		done.AddInt64("uid", userId);
+		done.AddString("nickname", nickname.c_str());
+	}
+
+	// 红心：一次拿全量 id，列表里直接点亮
+	std::vector<long long> ids;
+	if (api.FetchLikedIds(userId, &ids, &error)) {
+		for (long long id : ids)
+			done.AddInt64("liked", id);
+	}
+
+	// 我的歌单（含收藏的）
+	std::vector<ncm::PlaylistInfo> playlists;
+	if (api.FetchUserPlaylists(userId, &playlists, &error)) {
+		for (const ncm::PlaylistInfo& playlist : playlists) {
+			done.AddInt64("plid", playlist.id);
+			done.AddString("plname", playlist.name.c_str());
+			done.AddInt32("plcount", playlist.trackCount);
+		}
+	}
+
+	self->_PostIfAlive(&done);
+	return 0;
+}
+
+void MainWindow::_ApplyAccount(BMessage* message)
+{
+	const char* freshName = nullptr;
+	message->FindString("nickname", &freshName);
+
+	int64 uid = 0;
+	if (message->FindInt64("uid", &uid) == B_OK && uid > 0) {
+		fUserId = uid;
+
+		// 顺手把 uid / 昵称补进会话文件，下次启动就不用再查
+		std::string cookie;
+		std::string nickname;
+		long long ignored = 0;
+		LoadSession(&cookie, &nickname, &ignored);
+		if (freshName != nullptr && freshName[0] != 0)
+			nickname = freshName;
+		SaveSession(cookie.empty() ? fApi->Cookie() : cookie, nickname,
+			fUserId);
+
+		if (!nickname.empty()) {
+			BString label(B_TRANSLATE("使用 "));
+			label << nickname.c_str();
+			fUserMenu->Superitem()->SetLabel(label.String());
+		}
+	}
+
+	fLikedIds.clear();
+	int64 id = 0;
+	for (int32 i = 0; message->FindInt64("liked", i, &id) == B_OK; i++)
+		fLikedIds.insert(static_cast<long long>(id));
+
+	fPlaylists.clear();
+	const char* name = nullptr;
+	int32 trackCount = 0;
+	for (int32 i = 0; message->FindInt64("plid", i, &id) == B_OK; i++) {
+		ncm::PlaylistInfo playlist;
+		playlist.id = id;
+		if (message->FindString("plname", i, &name) == B_OK)
+			playlist.name = name;
+		if (message->FindInt32("plcount", i, &trackCount) == B_OK)
+			playlist.trackCount = trackCount;
+		fPlaylists.push_back(playlist);
+	}
+
+	_ApplyLikes();
+	_RebuildPlaylistMenu();
+}
+
+void MainWindow::_ApplyLikes()
+{
+	if (fLikedIds.empty())
+		return;
+
+	const int32 count = fResults->CountRows(nullptr);
+	for (int32 i = 0; i < count; i++) {
+		auto* row = static_cast<SongRow*>(fResults->RowAt(i, nullptr));
+		if (row == nullptr)
+			continue;
+		const bool liked = fLikedIds.count(row->Song().id) > 0;
+		if (liked != row->Field()->Liked()) {
+			row->SetLiked(liked);
+			fResults->InvalidateRow(row);
+		}
+	}
 }
 
 void MainWindow::_Alert(const BString& text)

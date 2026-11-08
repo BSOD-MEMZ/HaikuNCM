@@ -5,6 +5,7 @@
 #include <String.h>
 #include <Window.h>
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,11 @@ enum {
 	kMessagePlaylistClosed = 'plcl',
 	kMessageShowLogin = 'shlg',
 	kMessageToggleNowPlaying = 'nowp',
+	kMessageDebugTab = 'dbtb', // 调试：只切 BTabView，不同步 fTabIndex
+	kMessageDebugResize = 'drsz', // 调试：改窗口大小（回归布局用）
+	kMessageQuality = 'qual',      // 选音质
+	kMessageAccountDone = 'acct',  // 账号/红心/歌单都拉回来了
+	kMessageOpenUserPlaylist = 'oupn',
 };
 
 class MainWindow : public BWindow {
@@ -100,8 +106,14 @@ private:
 	void _ClearGeneric();
 	void _ToggleNowPlaying();
 	void _ShowNowPlayingPage(bool show);
+	void _PushNowPlaying(const ncm::Song& song);
 	void _StartNowPlayingThread();
 	void _Alert(const BString& text);
+	void _BuildQualityMenu(BMenu* parent);
+	void _FetchAccountInfo();
+	void _ApplyAccount(BMessage* message);
+	void _ApplyLikes();
+	void _RebuildPlaylistMenu();
 	int32 _IndexOfSong(long long id);
 	void _UpdateModeLabel();
 
@@ -111,6 +123,7 @@ private:
 	static int32 _GenericSearchThread(void* data);
 	static int32 _DetailThread(void* data);
 	static int32 _NowPlayingThread(void* data);
+	static int32 _AccountThread(void* data);
 
 	// 菜单
 	BMenuBar* fMenuBar = nullptr;
@@ -118,10 +131,13 @@ private:
 	BMenu* fUserMenu = nullptr;
 	BMenuItem* fUserItem = nullptr;
 	BMenuItem* fLogoutItem = nullptr;
+	BMenu* fQualityMenu = nullptr;
+	BMenu* fMyPlaylistMenu = nullptr;
 
 	// 搜索 + 内容区
 	BTextControl* fSearchField = nullptr;
 	BButton* fSearchButton = nullptr;
+	BView* fSearchRow = nullptr;
 	BTabView* fSearchTabs = nullptr;
 	BCardView* fContentHost = nullptr;
 	SongListView* fResults = nullptr;
@@ -165,6 +181,12 @@ private:
 	BString fKeyword;
 
 	PlaylistWindow* fPlaylistWindow = nullptr;
+
+	// 登录态：uid / 我喜欢的歌 / 我的歌单 / 音质
+	long long fUserId = 0;
+	std::set<long long> fLikedIds;
+	std::vector<ncm::PlaylistInfo> fPlaylists;
+	std::string fQuality = "standard";
 
 	volatile bool fQuitting = false;
 	volatile bool fBusy = false;

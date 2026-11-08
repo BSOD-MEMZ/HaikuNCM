@@ -46,6 +46,7 @@ private:
 	uint32 fBorders;
 	bool fPressed = false;
 	bool fHover = false;
+	bool fActive = false; // 播放中（播放键字形变绿）
 };
 
 #endif

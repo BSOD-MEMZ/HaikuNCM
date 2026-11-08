@@ -49,6 +49,21 @@ inline std::string LyricPath(long long id)
 	return CacheDir() + "/" + std::to_string(id) + ".lrc";
 }
 
+inline std::string TranslationPath(long long id)
+{
+	return CacheDir() + "/" + std::to_string(id) + ".tlyric";
+}
+
+inline std::string RomajiPath(long long id)
+{
+	return CacheDir() + "/" + std::to_string(id) + ".romalrc";
+}
+
+inline std::string CommentsPath(long long id)
+{
+	return CacheDir() + "/" + std::to_string(id) + ".comments";
+}
+
 inline std::string AudioPath(long long id, const std::string& type)
 {
 	return CacheDir() + "/" + std::to_string(id) + "."

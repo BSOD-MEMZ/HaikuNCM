@@ -167,6 +167,7 @@ void ParseSongItem(const json& item, Song* song)
 		&& !item[artistsKey].empty()) {
 		const json& first = item[artistsKey][0];
 		song->artist = first.value("name", "");
+		song->artistId = first.value("id", 0LL);
 		for (size_t i = 1; i < item[artistsKey].size(); i++) {
 			song->artist += "/";
 			song->artist += item[artistsKey][i].value("name", "");
@@ -176,8 +177,47 @@ void ParseSongItem(const json& item, Song* song)
 	const char* albumKey = item.contains("al") ? "al" : "album";
 	if (item.contains(albumKey) && item[albumKey].is_object()) {
 		song->album = item[albumKey].value("name", "");
+		song->albumId = item[albumKey].value("id", 0LL);
 		song->coverUrl = item[albumKey].value("picUrl", "");
 	}
+}
+
+} // namespace
+
+namespace {
+
+// 把上一步拿到的 Cookie 落进全局，供后续请求复用
+void AdoptCookies(const Response& response, std::string* cookie)
+{
+	const std::string musicU = ExtractCookie(response.headers, "MUSIC_U");
+	const std::string csrf = ExtractCookie(response.headers, "__csrf");
+	if (musicU.empty())
+		return;
+
+	gCookie = "MUSIC_U=" + musicU;
+	if (!csrf.empty())
+		gCookie += "; __csrf=" + csrf;
+	if (cookie != nullptr)
+		*cookie = gCookie;
+}
+
+bool ParseJson(const Response& response, json* document, std::string* error)
+{
+	try {
+		*document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON 解析失败: ") + exception.what();
+		return false;
+	}
+	return true;
+}
+
+std::string WeapiBody(const json& payload)
+{
+	const WeapiForm form = Weapi(payload.dump());
+	return "params=" + UrlEncode(form.params)
+		+ "&encSecKey=" + UrlEncode(form.encSecKey);
 }
 
 } // namespace
@@ -569,11 +609,12 @@ bool NeteaseApi::FetchAlbumDetail(long long id, AlbumInfo* info,
 }
 
 bool NeteaseApi::FetchLyric(long long id, std::string* lrc,
-	std::string* error)
+	std::string* translation, std::string* romaji, std::string* error)
 {
+	// lv 原文 / tv 翻译 / rv 罗马音，都要 -1（-1 表示全部）
 	const Response response = HttpGet(
 		"https://music.163.com/api/song/lyric?id=" + std::to_string(id)
-			+ "&lv=1&kv=1&tv=-1",
+			+ "&lv=-1&kv=-1&tv=-1&rv=-1",
 		BuildApiHeaders());
 	if (!response.Ok()) {
 		if (error != nullptr)
@@ -592,14 +633,187 @@ bool NeteaseApi::FetchLyric(long long id, std::string* lrc,
 		return false;
 	}
 
-	if (document.contains("lrc") && document["lrc"].is_object()) {
-		*lrc = document["lrc"].value("lyric", "");
-		return !lrc->empty();
+	const auto read = [&document](const char* key, std::string* out) {
+		if (out == nullptr)
+			return;
+		out->clear();
+		if (!document.contains(key) || !document[key].is_object())
+			return;
+		const json& lyric = document[key];
+		if (lyric.contains("lyric") && lyric["lyric"].is_string())
+			*out = lyric["lyric"].get<std::string>();
+	};
+
+	read("lrc", lrc);
+	read("tlyric", translation);
+	read("romalrc", romaji);
+
+	const bool hasLyric = lrc != nullptr && !lrc->empty();
+	const bool hasTranslation = translation != nullptr
+		&& !translation->empty();
+	if (!hasLyric && !hasTranslation) {
+		if (error != nullptr)
+			*error = "没有歌词";
+		return false;
+	}
+	return true;
+}
+
+bool NeteaseApi::FetchComments(long long songId, int limit, int offset,
+	std::vector<Comment>* comments, std::string* error)
+{
+	const json payload = {
+		{ "rid", songId },
+		{ "limit", limit },
+		{ "offset", offset },
+		{ "total", true },
+		{ "csrf_token", "" },
+	};
+
+	const Response response = PostForm(
+		"https://music.163.com/weapi/v1/resource/comments/R_SO_4_"
+			+ std::to_string(songId),
+		WeapiBody(payload), BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
 	}
 
-	if (error != nullptr)
-		*error = "没有歌词";
-	return false;
+	json document;
+	if (!ParseJson(response, &document, error))
+		return false;
+
+	if (document.value("code", -1) != 200) {
+		if (error != nullptr)
+			*error = "code " + std::to_string(document.value("code", -1));
+		return false;
+	}
+
+	comments->clear();
+	// 先把精彩评论摆前面，再补最新评论
+	for (const char* key : { "hotComments", "comments" }) {
+		if (!document.contains(key) || !document[key].is_array())
+			continue;
+		for (const json& item : document[key]) {
+			Comment comment;
+			if (item.contains("user") && item["user"].is_object())
+				comment.nickname = item["user"].value("nickname", "");
+			if (item.contains("content") && item["content"].is_string())
+				comment.content = item["content"].get<std::string>();
+			comment.likedCount = item.value("likedCount", 0);
+			if (comment.content.empty())
+				continue;
+			comments->push_back(comment);
+		}
+	}
+	return true;
+}
+
+bool NeteaseApi::FetchAccount(long long* userId, std::string* nickname,
+	std::string* error)
+{
+	const Response response = PostForm(
+		"https://music.163.com/weapi/w/nuser/account/get", WeapiBody(json::object()),
+		BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	if (!ParseJson(response, &document, error))
+		return false;
+
+	if (!document.contains("profile") || !document["profile"].is_object()) {
+		if (error != nullptr)
+			*error = "未登录";
+		return false;
+	}
+
+	const json& profile = document["profile"];
+	if (userId != nullptr)
+		*userId = profile.value("userId", 0LL);
+	if (nickname != nullptr)
+		*nickname = profile.value("nickname", "");
+	return true;
+}
+
+bool NeteaseApi::FetchLikedIds(long long userId, std::vector<long long>* ids,
+	std::string* error)
+{
+	if (gCookie.empty()) {
+		if (error != nullptr)
+			*error = "需要先登录";
+		return false;
+	}
+
+	const json payload = { { "uid", userId } };
+	const Response response = PostForm(
+		"https://music.163.com/weapi/song/like/get", WeapiBody(payload),
+		BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	if (!ParseJson(response, &document, error))
+		return false;
+
+	ids->clear();
+	if (!document.contains("ids") || !document["ids"].is_array())
+		return true;
+	for (const json& id : document["ids"])
+		if (id.is_number())
+			ids->push_back(id.get<long long>());
+	return true;
+}
+
+bool NeteaseApi::FetchUserPlaylists(long long userId,
+	std::vector<PlaylistInfo>* playlists, std::string* error)
+{
+	const json payload = {
+		{ "uid", userId },
+		{ "limit", 100 },
+		{ "offset", 0 },
+		{ "includeVideo", true },
+	};
+
+	const Response response = PostForm("https://music.163.com/weapi/user/playlist",
+		WeapiBody(payload), BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	if (!ParseJson(response, &document, error))
+		return false;
+
+	playlists->clear();
+	if (!document.contains("playlist") || !document["playlist"].is_array())
+		return true;
+	for (const json& item : document["playlist"]) {
+		PlaylistInfo info;
+		info.id = item.value("id", 0LL);
+		info.name = item.value("name", "");
+		info.trackCount = item.value("trackCount", 0);
+		if (info.id != 0)
+			playlists->push_back(info);
+	}
+	return true;
 }
 
 bool NeteaseApi::Login(const std::string& phone, const std::string& password,
@@ -664,44 +878,6 @@ bool NeteaseApi::Login(const std::string& phone, const std::string& password,
 		*nickname = document["profile"].value("nickname", "");
 	return true;
 }
-
-namespace {
-
-// 把上一步拿到的 Cookie 落进全局，供后续请求复用
-void AdoptCookies(const Response& response, std::string* cookie)
-{
-	const std::string musicU = ExtractCookie(response.headers, "MUSIC_U");
-	const std::string csrf = ExtractCookie(response.headers, "__csrf");
-	if (musicU.empty())
-		return;
-
-	gCookie = "MUSIC_U=" + musicU;
-	if (!csrf.empty())
-		gCookie += "; __csrf=" + csrf;
-	if (cookie != nullptr)
-		*cookie = gCookie;
-}
-
-bool ParseJson(const Response& response, json* document, std::string* error)
-{
-	try {
-		*document = json::parse(response.body);
-	} catch (const std::exception& exception) {
-		if (error != nullptr)
-			*error = std::string("JSON 解析失败: ") + exception.what();
-		return false;
-	}
-	return true;
-}
-
-std::string WeapiBody(const json& payload)
-{
-	const WeapiForm form = Weapi(payload.dump());
-	return "params=" + UrlEncode(form.params)
-		+ "&encSecKey=" + UrlEncode(form.encSecKey);
-}
-
-} // namespace
 
 bool NeteaseApi::SendSmsCaptcha(const std::string& phone, std::string* error)
 {
@@ -957,11 +1133,13 @@ bool NeteaseApi::Search(const std::string& keyword, int limit,
 		if (item.contains(artistsKey) && item[artistsKey].is_array()
 			&& !item[artistsKey].empty()) {
 			song.artist = item[artistsKey][0].value("name", "");
+			song.artistId = item[artistsKey][0].value("id", 0LL);
 		}
 
 		const char* albumKey = item.contains("al") ? "al" : "album";
 		if (item.contains(albumKey) && item[albumKey].is_object()) {
 			song.album = item[albumKey].value("name", "");
+			song.albumId = item[albumKey].value("id", 0LL);
 			song.coverUrl = item[albumKey].value("picUrl", "");
 		}
 

@@ -78,6 +78,7 @@ void TransportButton::SetKind(Kind kind)
 		fShape = fAltShape;
 		fAltShape = swap;
 		fKind = kind;
+		fActive = kind == kPause;
 		Invalidate();
 		return;
 	}
@@ -94,9 +95,11 @@ void TransportButton::Draw(BRect updateRect)
 	uint32 flags = be_control_look->Flags(this);
 	rgb_color base = LowColor();
 	if (fBorders != 0) {
-		be_control_look->DrawButtonFrame(this, bounds, updateRect, base, base,
+		// hover 时底面提亮一档，鼠标扫过能看出来
+		rgb_color face = fHover ? tint_color(base, B_LIGHTEN_1_TINT) : base;
+		be_control_look->DrawButtonFrame(this, bounds, updateRect, face, face,
 			flags, fBorders);
-		be_control_look->DrawButtonBackground(this, bounds, updateRect, base,
+		be_control_look->DrawButtonBackground(this, bounds, updateRect, face,
 			flags);
 	}
 
@@ -108,12 +111,15 @@ void TransportButton::_DrawGlyph(BRect bounds, const rgb_color& base)
 	if (fShape == nullptr)
 		return;
 
-	// 官方同款配色逻辑：可用时深四档，按下更深
+	// 官方同款配色逻辑：可用时深四档，按下更深；
+	// 悬停或正在播放时字形改成绿色渐变（MediaPlayer 的那个绿）
 	rgb_color symbol = IsEnabled()
 		? tint_color(base, B_DARKEN_4_TINT)
 		: tint_color(base, B_DARKEN_2_TINT);
 	if (fPressed)
 		symbol = tint_color(symbol, B_DARKEN_1_TINT);
+
+	const bool green = fHover || fActive;
 
 	// 字形居中
 	BPoint offset;
@@ -128,8 +134,13 @@ void TransportButton::_DrawGlyph(BRect bounds, const rgb_color& base)
 
 	// 官方同款：字形用垂直线性渐变（暗 -> 基色），立体感来自这里
 	BGradientLinear gradient;
-	gradient.AddColor(tint_color(symbol, B_DARKEN_1_TINT), 0);
-	gradient.AddColor(symbol, 255);
+	if (green) {
+		gradient.AddColor((rgb_color){ 46, 122, 26, 255 }, 0);
+		gradient.AddColor((rgb_color){ 146, 214, 88, 255 }, 255);
+	} else {
+		gradient.AddColor(tint_color(symbol, B_DARKEN_1_TINT), 0);
+		gradient.AddColor(symbol, 255);
+	}
 	gradient.SetStart(offset);
 	BPoint end(offset);
 	end.y += fShape->Bounds().Height();

@@ -28,8 +28,7 @@ void CoverView::SetPadding(float padding)
 
 void CoverView::Draw(BRect)
 {
-	FillRect(Bounds(), B_SOLID_LOW);
-
+	// 底色由 SetViewColor 决定：普通页面是面板色，播放页设成透明
 	if (fBitmap == nullptr || !fBitmap->IsValid())
 		return;
 

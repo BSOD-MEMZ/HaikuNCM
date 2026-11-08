@@ -1,6 +1,7 @@
 #include "DetailWindow.h"
 
 #include "CoverView.h"
+#include "NowPlayingPage.h"
 #include "SongRow.h"
 #include "net/cachepaths.h"
 
@@ -356,6 +357,23 @@ void DetailWindow::MessageReceived(BMessage* message)
 		case kMessageDetailAlbums:
 			_FillAlbums();
 			return;
+
+		case kMessageOpenArtist:
+		case kMessageOpenAlbum:
+		{
+			// 页面里的列表点歌手/专辑名，继续往下开新页
+			int64 id = 0;
+			if (message->FindInt64("id", &id) != B_OK || id <= 0)
+				return;
+			auto* window = new DetailWindow(fTarget,
+				message->what == kMessageOpenArtist);
+			if (message->what == kMessageOpenArtist)
+				window->LoadArtist(id, "");
+			else
+				window->LoadAlbum(id, "");
+			window->Show();
+			return;
+		}
 
 		case kMessageDetailCovers:
 		{

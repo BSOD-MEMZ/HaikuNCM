@@ -15,6 +15,8 @@ public:
 
 	void SetCover(BBitmap* bitmap);
 	BBitmap* Cover() const { return fCover; }
+	void SetLiked(bool liked) { fLiked = liked; }
+	bool Liked() const { return fLiked; }
 	void SetDisplayIndex(int32 index) { fDisplayIndex = index; }
 	int32 DisplayIndex() const { return fDisplayIndex; }
 
@@ -23,6 +25,7 @@ public:
 private:
 	ncm::Song fSong;
 	BBitmap* fCover = nullptr;
+	bool fLiked = false;
 	int32 fDisplayIndex = 0;
 };
 
@@ -31,6 +34,7 @@ public:
 	SongRow(const ncm::Song& song);
 
 	void SetCover(BBitmap* bitmap);
+	void SetLiked(bool liked);
 	void SetDisplayIndex(int32 index);
 	SongField* Field() const
 	{

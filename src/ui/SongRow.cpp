@@ -1,6 +1,7 @@
 #include "SongRow.h"
 
 #include "MainWindow.h"
+#include "NowPlayingPage.h"
 
 #include <Catalog.h>
 
@@ -50,6 +51,13 @@ void SongRow::SetDisplayIndex(int32 index)
 void SongRow::SetCover(BBitmap* bitmap)
 {
 	Field()->SetCover(bitmap);
+}
+
+void SongRow::SetLiked(bool liked)
+{
+	for (int32 column = 0; column < 4; column++)
+		static_cast<SongField*>(const_cast<BField*>(GetField(column)))
+			->SetLiked(liked);
 }
 
 // ------------------------------------------------------------ 通用绘制辅助
@@ -182,10 +190,11 @@ void SongHeartColumn::DrawField(BField* _field, BRect rect, BView* parent)
 {
 	SongField* field = static_cast<SongField*>(_field);
 
-	// 点赞状态需要登录接口，登录前统一空心灰
-	(void)field;
-	parent->SetHighColor(tint_color(ui_color(B_LIST_ITEM_TEXT_COLOR),
-		B_LIGHTEN_1_TINT));
+	// 登录后 /weapi/song/like/get 拉到的红心状态直接标在列表上
+	parent->SetHighColor(field->Liked()
+			? (rgb_color){ 208, 48, 62, 255 }
+			: tint_color(ui_color(B_LIST_ITEM_TEXT_COLOR),
+				B_LIGHTEN_1_TINT));
 	font_height fh;
 	parent->GetFontHeight(&fh);
 	const BString heart("\xe2\x99\xa5");
@@ -274,6 +283,41 @@ void SongListView::MouseDown(BPoint where)
 			AddToSelection(row);
 			_ShowContextMenu(where);
 		}
+		return;
+	}
+
+	// 左键点专辑列 = 开专辑页；点标题列下半行（歌手名）= 开歌手页
+	auto* row = static_cast<SongRow*>(RowAt(where));
+	BColumn* column = ColumnAt(where);
+	if (row == nullptr || column == nullptr || Window() == nullptr)
+		return;
+
+	int32 index = -1;
+	for (int32 i = 0; i < CountColumns(); i++) {
+		if (ColumnAt(i) == column) {
+			index = i;
+			break;
+		}
+	}
+
+	const ncm::Song& song = row->Song();
+	uint32 what = 0;
+	int64 target = 0;
+	if (index == 1 && song.albumId > 0) {
+		what = kMessageOpenAlbum;
+		target = song.albumId;
+	} else if (index == 0 && song.artistId > 0) {
+		const BRect field = GetFieldRect(row, column);
+		if (where.y > field.top + field.Height() / 2.0f) {
+			what = kMessageOpenArtist;
+			target = song.artistId;
+		}
+	}
+
+	if (what != 0) {
+		BMessage message(what);
+		message.AddInt64("id", target);
+		Window()->PostMessage(&message);
 	}
 }
 

@@ -13,6 +13,8 @@ struct Song {
 	std::string album;
 	std::string coverUrl;
 	long long durationMs = 0;
+	long long artistId = 0; // 点歌手名跳转用
+	long long albumId = 0;  // 点专辑名跳转用
 	int fee = -1; // 0: free, 1: VIP (30s trial when anonymous), 8: free low quality
 };
 
@@ -30,6 +32,18 @@ struct ArtistInfo {
 	std::string briefDesc;
 	int albumCount = 0;
 	int songCount = 0;
+};
+
+struct Comment {
+	std::string nickname;
+	std::string content;
+	int likedCount = 0;
+};
+
+struct PlaylistInfo {
+	long long id = 0;
+	std::string name;
+	int trackCount = 0;
 };
 
 struct AlbumInfo {
@@ -67,7 +81,18 @@ public:
 		std::string* error);
 	bool FetchArtistSongs(long long id, std::vector<Song>* songs,
 		std::string* error);
-	bool FetchLyric(long long id, std::string* lrc, std::string* error);
+	bool FetchLyric(long long id, std::string* lrc, std::string* translation,
+		std::string* romaji, std::string* error);
+	bool FetchComments(long long songId, int limit, int offset,
+		std::vector<Comment>* comments, std::string* error);
+
+	// 登录态相关：账号信息 / 我喜欢的音乐 / 我的歌单
+	bool FetchAccount(long long* userId, std::string* nickname,
+		std::string* error);
+	bool FetchLikedIds(long long userId, std::vector<long long>* ids,
+		std::string* error);
+	bool FetchUserPlaylists(long long userId,
+		std::vector<PlaylistInfo>* playlists, std::string* error);
 
 	// 歌手页 / 专辑页
 	bool FetchArtist(long long id, ArtistInfo* info,

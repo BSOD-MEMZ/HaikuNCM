@@ -10,8 +10,14 @@ Haiku 原生的第三方网易云音乐客户端。C++17，Interface Kit + Media
 - 歌曲表：封面、双行标题（标题+歌手）、专辑、喜欢、时长，BColumnListView 自绘列
 - 歌手页 / 专辑页：新窗口，头像·封面 + 名字 + 简介，下面挂歌曲/专辑 tab，
   双击歌曲直接把整批接成播放队列
-- 播放页：嵌在主窗口内容区（封面 + 滚动歌词），底部播放控件始终保留，不再单开窗口
-- 播放条：进度条压在底板顶部，封面·曲名在左、传输键居中、时间·红心·模式·音量在右
+- 播放页：嵌在主窗口内容区（模糊封面背景 + 滚动歌词 + 评论页签），底部播放控件始终保留；
+  歌词支持翻译 / 罗马音开关（有数据才显示），背景模糊是本地降采样 + box blur 算的
+  （Haiku 没有现成的模糊 API）
+- 播放条：进度条压在底板顶部，封面·曲名在左、传输键居中、时间·红心·模式·音量在右；
+  hover 时按钮底面提亮、字形转绿色渐变，播放中播放键保持绿色
+- 音质选择：音乐 → 音质（标准 / 较高 / 极高 / 无损）
+- 登录态：红心状态从 `/weapi/song/like/get` 全量同步到列表，音乐菜单里列「我的歌单」
+- 点歌手名（标题列下半）或专辑列、播放页里的歌手·专辑链接，直接开对应页面
 - 红心：调 `/weapi/song/like`（需登录）
 - 播放列表窗口
 - 登录三方式：扫码（默认页，开窗自动取码）/ 手机验证码 / 密码
@@ -58,6 +64,13 @@ icon/         SVG 源 + 64/32/16 PNG（HVIF 待 Icon-O-Matic 导出）
 - beta6 的接口叫 `SetBorder(border_style)`（不是 `SetBorderStyle`）；`B_NO_BORDER` 才能让 tab 贴着列表
 - `BTabView::Select()` 内部会 `Hide()/Show()` 子视图，**必须在窗口锁里调**，否则 `Looper must be locked` 直接崩
 - 自定义 `BControl`（如传输按钮）不实现 `GetPreferredSize` 就没有尺寸，放进布局会被压成 0 宽
+- `BListView(name, type, flags)` 第三个参数是 **flags**；把 `B_PLAIN_BORDER`（值为 0）当 flags 传进去
+  等于清掉 `B_WILL_DRAW`，列表有数据也一个字不画
+- `BLayoutBuilder` 里 `Add*/AddGroup*` 默认 weight=1：菜单栏行、搜索行、底板都要显式给 0.0f，
+  否则窗口一放大它们就跟着长，把内容区挤走
+- 透明子视图（`SetViewColor(B_TRANSPARENT_COLOR)`）不擦底色：内容会移动的视图（比如滚动的歌词）
+  必须自己有背景，否则旧位置的字会一直留着，看起来像"歌词重复"
+- `BStringView::SetText()` 不会触发父布局重排，文字宽度变了要自己 `InvalidateLayout(true)`
 
 ## 命令行（调试用）
 
