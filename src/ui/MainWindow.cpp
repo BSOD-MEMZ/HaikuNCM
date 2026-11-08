@@ -1,10 +1,13 @@
 #include "MainWindow.h"
 
+#include "AvatarGrid.h"
 #include "net/cachepaths.h"
 #include "net/HttpRangeSource.h"
 #include "DetailWindow.h"
 #include "LoginWindow.h"
+#include "CommentsWindow.h"
 #include "NowPlayingPage.h"
+#include "ThemeColor.h"
 #include "PlaylistWindow.h"
 #include "SeekSlider.h"
 #include "SongRow.h"
@@ -23,6 +26,7 @@
 #include <MenuBar.h>
 #include <MenuItem.h>
 #include <MessageRunner.h>
+#include <ScrollView.h>
 #include <Slider.h>
 #include <StringView.h>
 #include <TabView.h>
@@ -280,22 +284,33 @@ void MainWindow::_BuildContent()
 	};
 
 	for (int32 i = 1; i < kTabCount; i++) {
-		// 第 3 个参数是 flags 不是 border：B_PLAIN_BORDER 值为 0，
-		// 当 flags 传进来就把 B_WILL_DRAW 清了，列表整个不画东西
-		// 第三个参数是 flags：别把 B_PLAIN_BORDER（值为 0）当 flags 传进去，
-		// 那样 B_WILL_DRAW 被清掉，列表整个不画东西
-		BListView* list = new BListView("generic", B_SINGLE_SELECTION_LIST,
-			B_WILL_DRAW | B_FRAME_EVENTS | B_NAVIGABLE);
-		list->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
-		list->SetInvocationMessage(new BMessage(kMessageGenericOpen));
+		const bool isGrid = i == 3 || i == 4; // 歌手 / 用户
+		BView* content = nullptr;
+		if (isGrid) {
+			// 歌手双击开歌手页；用户没有详情页，只展示
+			auto* grid = new AvatarGridView(
+				i == 3 ? kMessageOpenArtist : 0);
+			content = new BScrollView("grid-scroll", grid, 0, false, true);
+			fAvatarGrids[i - 1 - 2] = grid;
+		} else {
+			// 第三个参数是 flags：别把 B_PLAIN_BORDER（值为 0）当 flags 传进去，
+			// 那样 B_WILL_DRAW 被清掉，列表整个不画东西
+			BListView* list = new BListView("generic",
+				B_SINGLE_SELECTION_LIST,
+				B_WILL_DRAW | B_FRAME_EVENTS | B_NAVIGABLE);
+			list->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
+			list->SetInvocationMessage(new BMessage(kMessageGenericOpen));
+			fGenericLists[i - 1] = list;
+			content = list;
+		}
+
 		BGroupView* card = new BGroupView("card", B_VERTICAL, 0.0f);
 		BLayoutBuilder::Group<>(card, B_VERTICAL, 0.0f)
-			.Add(list, 1.0f)
+			.Add(content, 1.0f)
 			.End();
 		BTab* tab = new BTab();
 		fSearchTabs->AddTab(card, tab);
 		tab->SetLabel(kTabNames[i]);
-		fGenericLists[i - 1] = list;
 	}
 
 	fNowView = new NowPlayingView();
@@ -336,6 +351,10 @@ void MainWindow::_BuildTransport()
 		B_TRANSLATE("喜欢"), new BMessage(kMessageLike));
 	fHeartButton->SetToolTip(B_TRANSLATE("喜欢"));
 
+	fCommentButton = new TransportButton("comments", TransportButton::kComment,
+		B_TRANSLATE("评论"), new BMessage(kMessageShowComments));
+	fCommentButton->SetToolTip(B_TRANSLATE("查看评论"));
+
 	fModeButton = new BButton("mode", B_TRANSLATE("顺序"),
 		new BMessage(kMessageMode));
 	fModeButton->SetExplicitMinSize(BSize(56, B_SIZE_UNSET));
@@ -347,11 +366,14 @@ void MainWindow::_BuildTransport()
 	fVolume->SetExplicitMinSize(BSize(80, B_SIZE_UNSET));
 	fVolume->SetExplicitMaxSize(BSize(110, B_SIZE_UNSET));
 
-	// 左：封面 + 曲名；中：上一首/播放/下一首；右：时间/红心/模式/音量。
+	// 左：封面曲名 + 红心 + 评论；中：上一首/播放/下一首；右：时间/模式/音量。
 	// 左右两块宽度一致，中间那组才真正居中。
-	BGroupView* left = new BGroupView("transport-left", B_HORIZONTAL, 0.0f);
-	BLayoutBuilder::Group<>(left, B_HORIZONTAL, 0.0f)
+	BGroupView* left = new BGroupView("transport-left", B_HORIZONTAL,
+		B_USE_SMALL_SPACING);
+	BLayoutBuilder::Group<>(left, B_HORIZONTAL, B_USE_SMALL_SPACING)
 		.Add(fNowBadge, 1.0f)
+		.Add(fHeartButton, 0.0f)
+		.Add(fCommentButton, 0.0f)
 		.End();
 	left->SetExplicitMinSize(BSize(300, 56));
 	left->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, 56));
@@ -370,7 +392,6 @@ void MainWindow::_BuildTransport()
 	BLayoutBuilder::Group<>(right, B_HORIZONTAL, B_USE_SMALL_SPACING)
 		.AddGlue()
 		.Add(fTimeLabel)
-		.Add(fHeartButton)
 		.Add(fModeButton)
 		.Add(fVolume)
 		.End();
@@ -389,6 +410,8 @@ void MainWindow::_BuildTransport()
 			.Add(right, 1.0f)
 			.End()
 		.End();
+	fTransportLeft = left;
+	fTransportRight = right;
 }
 
 void MainWindow::PlayIndex(int32 index)
@@ -420,14 +443,14 @@ void MainWindow::ShowNowPlaying()
 
 void MainWindow::ShowArtist(long long id, const char* name)
 {
-	auto* detail = new DetailWindow(BMessenger(this), true);
+	auto* detail = new DetailWindow(BMessenger(this), kDetailArtist);
 	detail->LoadArtist(id, name);
 	detail->Show();
 }
 
 void MainWindow::ShowAlbum(long long id, const char* name)
 {
-	auto* detail = new DetailWindow(BMessenger(this), false);
+	auto* detail = new DetailWindow(BMessenger(this), kDetailAlbum);
 	detail->LoadAlbum(id, name);
 	detail->Show();
 }
@@ -483,7 +506,13 @@ void MainWindow::MessageReceived(BMessage* message)
 			fLock.Unlock();
 			fGenericReady[slot] = true;
 
-			// 只有在看的那个 tab 才刷新界面
+			// 歌手 / 用户是头像网格，其它是普通列表
+			if (slot >= 2 && fAvatarGrids[slot - 2] != nullptr) {
+				fAvatarGrids[slot - 2]->SetItems(items);
+				_FetchAvatars(slot);
+				return;
+			}
+
 			BListView* list = fGenericLists[slot];
 			if (list != nullptr) {
 				list->MakeEmpty();
@@ -502,46 +531,39 @@ void MainWindow::MessageReceived(BMessage* message)
 			const int32 slot = fTabIndex - 1;
 			if (slot < 0 || slot >= kTabCount - 1)
 				return;
-			BListView* list = fGenericLists[slot];
-			const int32 index = list != nullptr ? list->CurrentSelection() : -1;
+			BListView* list = slot >= 0 && slot < kTabCount - 1
+				? fGenericLists[slot] : nullptr;
+			if (list == nullptr)
+				return;
+			const int32 index = list->CurrentSelection();
 			if (index < 0
 				|| index >= static_cast<int32>(fGenericItems[slot].size()))
 				return;
 
 			const ncm::GenericItem item = fGenericItems[slot][index];
 
-			// 歌手 / 专辑：开独立页面窗口
-			if (fSearchType == 100 || fSearchType == 10) {
-				auto* detail = new DetailWindow(BMessenger(this),
-					fSearchType == 100);
-				if (fSearchType == 100)
-					detail->LoadArtist(item.id, item.name.c_str());
-				else
-					detail->LoadAlbum(item.id, item.name.c_str());
-				detail->Show();
-				return;
-			}
+			// 歌单 / 专辑 / 歌手：都开独立页面窗口，里面是同一套歌曲表
+			int detailKind = -1;
+			if (fSearchType == 1000)
+				detailKind = kDetailPlaylist;
+			else if (fSearchType == 10)
+				detailKind = kDetailAlbum;
+			else if (fSearchType == 100)
+				detailKind = kDetailArtist;
 
-			if (fSearchType != 1000) {
+			if (detailKind < 0) {
 				_Alert(B_TRANSLATE("这个类目只做展示"));
 				return;
 			}
 
-			fBusy = true;
-			BMessage request(kMessageGenericOpen);
-			request.AddInt32("kind", fSearchType);
-			request.AddInt64("id", item.id);
-			request.AddString("name", item.name.c_str());
-			auto* payload = new std::pair<MainWindow*, BMessage>(this,
-				request);
-			thread_id thread = spawn_thread(_DetailThread, "ncm-detail",
-				B_NORMAL_PRIORITY, payload);
-			if (thread < B_OK) {
-				delete payload;
-				fBusy = false;
-				return;
-			}
-			resume_thread(thread);
+			auto* detail = new DetailWindow(BMessenger(this), detailKind);
+			if (detailKind == kDetailPlaylist)
+				detail->LoadPlaylist(item.id, item.name.c_str());
+			else if (detailKind == kDetailAlbum)
+				detail->LoadAlbum(item.id, item.name.c_str());
+			else
+				detail->LoadArtist(item.id, item.name.c_str());
+			detail->Show();
 			return;
 		}
 
@@ -593,11 +615,7 @@ void MainWindow::MessageReceived(BMessage* message)
 			int32 index = 0;
 			if (message->FindInt32("index", &index) != B_OK)
 				return;
-			// >= 10 表示切播放页内部的页签（10 歌词 / 11 评论）
-			if (index >= 10)
-				fNowView->SelectTab(index - 10);
-			else
-				fSearchTabs->Select(index);
+			fSearchTabs->Select(index);
 			return;
 		}
 
@@ -638,6 +656,39 @@ void MainWindow::MessageReceived(BMessage* message)
 				return;
 
 			_PushNowPlaying(song);
+			return;
+		}
+
+		case kMessageShowComments:
+		{
+			fLock.Lock();
+			const bool valid = fCurrentIndex >= 0
+				&& static_cast<size_t>(fCurrentIndex) < fSongs.size();
+			const ncm::Song song = valid ? fSongs[fCurrentIndex] : ncm::Song();
+			fLock.Unlock();
+
+			if (song.id == 0)
+				return;
+			if (fCommentsWindow != nullptr) {
+				fCommentsWindow->Activate();
+				return;
+			}
+			fCommentsWindow = new CommentsWindow(BMessenger(this),
+				song.id, song.name.c_str());
+			fCommentsWindow->Show();
+			return;
+		}
+
+		case kMessageCommentsClosed:
+			fCommentsWindow = nullptr;
+			return;
+
+		case kMessageAvatarsDone:
+		{
+			int32 slot = -1;
+			if (message->FindInt32("slot", &slot) == B_OK && slot >= 2
+				&& slot < kTabCount - 1 && fAvatarGrids[slot - 2] != nullptr)
+				fAvatarGrids[slot - 2]->RefreshAvatars();
 			return;
 		}
 
@@ -872,25 +923,15 @@ void MainWindow::MessageReceived(BMessage* message)
 		case kMessageOpenUserPlaylist:
 		{
 			int64 id = 0;
+			const char* name = nullptr;
 			if (message->FindInt64("id", &id) != B_OK || id <= 0)
 				return;
-			if (fBusy)
-				return;
+			message->FindString("name", &name);
 
-			fBusy = true;
-			BMessage request(kMessageGenericOpen);
-			request.AddInt32("kind", 1000);
-			request.AddInt64("id", id);
-			auto* payload = new std::pair<MainWindow*, BMessage>(this,
-				request);
-			thread_id thread = spawn_thread(_DetailThread, "ncm-detail",
-				B_NORMAL_PRIORITY, payload);
-			if (thread < B_OK) {
-				delete payload;
-				fBusy = false;
-				return;
-			}
-			resume_thread(thread);
+			auto* detail = new DetailWindow(BMessenger(this),
+				kDetailPlaylist);
+			detail->LoadPlaylist(id, name);
+			detail->Show();
 			return;
 		}
 
@@ -1280,12 +1321,18 @@ int32 MainWindow::_DetailThread(void* data)
 	std::vector<ncm::Song> songs;
 	std::string error;
 	bool ok = false;
-	if (kind == 1000)
-		ok = self->fApi->FetchPlaylistSongs(id, &songs, &error);
-	else if (kind == 10)
-		ok = self->fApi->FetchAlbumSongs(id, &songs, &error);
-	else if (kind == 100)
-		ok = self->fApi->FetchArtistSongs(id, &songs, &error);
+	try {
+		if (kind == 1000)
+			ok = self->fApi->FetchPlaylistSongs(id, &songs, &error);
+		else if (kind == 10)
+			ok = self->fApi->FetchAlbumSongs(id, &songs, &error);
+		else if (kind == 100)
+			ok = self->fApi->FetchArtistSongs(id, &songs, &error);
+	} catch (const std::exception& exception) {
+		// 线程里漏出去的异常会直接 abort 整个程序，这里兜住
+		error = exception.what();
+		ok = false;
+	}
 
 	if (ok) {
 		self->fLock.Lock();
@@ -1619,10 +1666,60 @@ void MainWindow::_PushNowPlaying(const ncm::Song& song)
 		mini = BTranslationUtils::GetBitmapFile(CoverPath(song.id).c_str());
 	fNowBadge->SetInfo(song.name.c_str(), song.artist.c_str(), mini);
 
+	// 封面主题色铺满整个窗口（导航栏以外）
+	const rgb_color theme = ThemeColorFromCover(mini);
+	_ApplyTheme(theme);
+
 	fNowView->SetSong(song.name.c_str(), song.artist.c_str(), song.artistId,
 		song.album.c_str(), song.albumId, coverPath.c_str(),
 		LyricPath(song.id).c_str(), TranslationPath(song.id).c_str(),
-		RomajiPath(song.id).c_str(), CommentsPath(song.id).c_str());
+		RomajiPath(song.id).c_str());
+	_SyncHeartButton();
+}
+
+void MainWindow::_ApplyTheme(rgb_color color)
+{
+	fTheme = color;
+	const auto tint = [color](BView* view) {
+		if (view == nullptr)
+			return;
+		view->SetViewColor(color);
+		view->SetLowColor(color);
+	};
+
+	tint(fSearchRow);
+	tint(fContentHost);
+	tint(fTransport);
+	tint(fTransportLeft);
+	tint(fTransportRight);
+	tint(fNowBadge);
+	tint(fPrevButton);
+	tint(fPlayButton);
+	tint(fNextButton);
+	tint(fHeartButton);
+	tint(fCommentButton);
+	tint(fVolume);
+	if (fSearchTabs != nullptr) {
+		tint(fSearchTabs);
+		for (int32 i = 0; i < fSearchTabs->CountTabs(); i++)
+			tint(fSearchTabs->ViewForTab(i));
+	}
+	if (fNowView != nullptr)
+		fNowView->SetThemeColor(color);
+}
+
+void MainWindow::_SyncHeartButton()
+{
+	fLock.Lock();
+	const bool valid = fCurrentIndex >= 0
+		&& static_cast<size_t>(fCurrentIndex) < fSongs.size();
+	const long long id = valid ? fSongs[fCurrentIndex].id : 0;
+	fLock.Unlock();
+
+	fLiked = id != 0 && fLikedIds.count(id) > 0;
+	fHeartButton->SetKind(fLiked ? TransportButton::kHeartFilled
+								 : TransportButton::kHeart);
+	fHeartButton->Invalidate();
 }
 
 void MainWindow::_StartNowPlayingThread()
@@ -1706,7 +1803,6 @@ void MainWindow::_BuildQualityMenu(BMenu* parent)
 		{ B_TRANSLATE("标准"), "standard" },
 		{ B_TRANSLATE("较高"), "higher" },
 		{ B_TRANSLATE("极高"), "exhigh" },
-		{ B_TRANSLATE("无损"), "lossless" },
 	};
 
 	for (const auto& entry : kLevels) {
@@ -1850,6 +1946,7 @@ void MainWindow::_ApplyAccount(BMessage* message)
 
 	_ApplyLikes();
 	_RebuildPlaylistMenu();
+	_SyncHeartButton();
 }
 
 void MainWindow::_ApplyLikes()
@@ -1868,6 +1965,54 @@ void MainWindow::_ApplyLikes()
 			fResults->InvalidateRow(row);
 		}
 	}
+}
+
+void MainWindow::_FetchAvatars(int32 slot)
+{
+	if (slot < 0 || slot >= kTabCount - 1)
+		return;
+
+	auto* job = new std::pair<MainWindow*, int32>(this, slot);
+	thread_id thread = spawn_thread(_AvatarThread, "ncm-avatars",
+		B_LOW_PRIORITY, job);
+	if (thread < B_OK) {
+		delete job;
+		return;
+	}
+	resume_thread(thread);
+}
+
+int32 MainWindow::_AvatarThread(void* data)
+{
+	auto* job = static_cast<std::pair<MainWindow*, int32>*>(data);
+	MainWindow* self = job->first;
+	const int32 slot = job->second;
+	delete job;
+
+	ncm::NeteaseApi api;
+	std::string error;
+
+	self->fLock.Lock();
+	std::vector<ncm::GenericItem> items = self->fGenericItems[slot];
+	self->fLock.Unlock();
+
+	for (const ncm::GenericItem& item : items) {
+		if (item.imageUrl.empty())
+			continue;
+
+		const std::string path = ncm::CacheDir() + "/avatar_"
+			+ std::to_string(item.id) + ".jpg";
+		struct stat info;
+		if (stat(path.c_str(), &info) == 0 && info.st_size > 1024)
+			continue;
+
+		api.DownloadCover(item.imageUrl, path, &error);
+	}
+
+	BMessage done(kMessageAvatarsDone);
+	done.AddInt32("slot", slot);
+	self->_PostIfAlive(&done);
+	return 0;
 }
 
 void MainWindow::_Alert(const BString& text)

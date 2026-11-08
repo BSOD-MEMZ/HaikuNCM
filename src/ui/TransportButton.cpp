@@ -42,6 +42,12 @@ TransportButton::TransportButton(const char* name, Kind kind,
 		case kPause:
 			fShape = _PauseShape(height);
 			break;
+		case kHeartFilled:
+			fShape = _HeartShape(height);
+			break;
+		case kComment:
+			fShape = _CommentShape(height);
+			break;
 		default:
 			fShape = _HeartShape(height);
 			break;
@@ -282,6 +288,32 @@ BShape* TransportButton::_PauseShape(float height) const
 }
 
 // 爱心没有官方字形，用同风格贝塞尔自绘（实心/空心同一路径）
+// 实心评论气泡（左下带尾巴）
+BShape* TransportButton::_CommentShape(float height) const
+{
+	BShape* shape = new BShape();
+
+	const float x0 = height * 0.05f;
+	const float x1 = height * 1.95f;
+	const float y0 = height * 0.1f;
+	const float y1 = height * 1.4f;
+	const float tail = height * 0.45f;
+
+	shape->MoveTo(BPoint(x0 + tail, y0));
+	shape->LineTo(BPoint(x1 - tail, y0));
+	shape->LineTo(BPoint(x1, y0 + tail));
+	shape->LineTo(BPoint(x1, y1 - tail));
+	shape->LineTo(BPoint(x1 - tail, y1));
+	shape->LineTo(BPoint(x0 + tail * 1.6f, y1));
+	shape->LineTo(BPoint(x0, y1 + tail));
+	shape->LineTo(BPoint(x0 + tail * 0.6f, y1));
+	shape->LineTo(BPoint(x0, y1 - tail * 0.4f));
+	shape->LineTo(BPoint(x0, y0 + tail));
+	shape->Close();
+
+	return shape;
+}
+
 BShape* TransportButton::_HeartShape(float height) const
 {
 	BShape* shape = new BShape();

@@ -22,7 +22,10 @@ class BStringView;
 class BTabView;
 class BTextControl;
 class BView;
+class AvatarGridView;
 class BCardView;
+class BView;
+class CommentsWindow;
 class PlaylistWindow;
 class NowPlayingBadge;
 class NowPlayingView;
@@ -66,6 +69,7 @@ enum {
 	kMessageQuality = 'qual',      // 选音质
 	kMessageAccountDone = 'acct',  // 账号/红心/歌单都拉回来了
 	kMessageOpenUserPlaylist = 'oupn',
+	kMessageAvatarsDone = 'avdn',
 };
 
 class MainWindow : public BWindow {
@@ -107,12 +111,15 @@ private:
 	void _ToggleNowPlaying();
 	void _ShowNowPlayingPage(bool show);
 	void _PushNowPlaying(const ncm::Song& song);
+	void _ApplyTheme(rgb_color color);
+	void _SyncHeartButton();
 	void _StartNowPlayingThread();
 	void _Alert(const BString& text);
 	void _BuildQualityMenu(BMenu* parent);
 	void _FetchAccountInfo();
 	void _ApplyAccount(BMessage* message);
 	void _ApplyLikes();
+	void _FetchAvatars(int32 slot);
 	void _RebuildPlaylistMenu();
 	int32 _IndexOfSong(long long id);
 	void _UpdateModeLabel();
@@ -124,6 +131,7 @@ private:
 	static int32 _DetailThread(void* data);
 	static int32 _NowPlayingThread(void* data);
 	static int32 _AccountThread(void* data);
+	static int32 _AvatarThread(void* data);
 
 	// 菜单
 	BMenuBar* fMenuBar = nullptr;
@@ -143,6 +151,8 @@ private:
 	SongListView* fResults = nullptr;
 	BListView* fGenericLists[5] = {nullptr, nullptr, nullptr, nullptr,
 		nullptr};
+	// 歌手 / 用户 tab 用头像网格（下标对应 slot：2=歌手 3=用户）
+	AvatarGridView* fAvatarGrids[2] = {nullptr, nullptr};
 	std::vector<ncm::GenericItem> fGenericItems[5];
 	bool fGenericReady[5] = {false, false, false, false, false};
 	bool fGenericLoading[5] = {false, false, false, false, false};
@@ -154,9 +164,13 @@ private:
 	NowPlayingView* fNowView = nullptr;
 	NowPlayingBadge* fNowBadge = nullptr;
 	bool fShowingNow = false;
+	CommentsWindow* fCommentsWindow = nullptr;
 
 	// 底部播放底板
 	BView* fTransport = nullptr;
+	BView* fTransportLeft = nullptr;
+	BView* fTransportRight = nullptr;
+	rgb_color fTheme;
 	TransportButton* fPrevButton = nullptr;
 	TransportButton* fPlayButton = nullptr;
 	TransportButton* fNextButton = nullptr;
@@ -164,6 +178,7 @@ private:
 	BStringView* fTimeLabel = nullptr;
 	BSlider* fVolume = nullptr;
 	TransportButton* fHeartButton = nullptr;
+	TransportButton* fCommentButton = nullptr;
 	BButton* fModeButton = nullptr;
 
 	ncm::Player* fPlayer = nullptr;

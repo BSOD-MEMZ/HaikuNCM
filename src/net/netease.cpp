@@ -296,6 +296,7 @@ bool NeteaseApi::SearchGeneric(int type, const std::string& keyword,
 
 	for (const json& item : result[listKey]) {
 		GenericItem entry;
+		try {
 		entry.id = item.value("id", 0LL);
 		entry.name = item.value(nameKey, "");
 
@@ -359,6 +360,15 @@ bool NeteaseApi::SearchGeneric(int type, const std::string& keyword,
 				break;
 		}
 
+			if (type == 100 && item.contains("picUrl")
+				&& item["picUrl"].is_string())
+				entry.imageUrl = item["picUrl"].get<std::string>() + "?param=120y120";
+			else if (type == 1002 && item.contains("avatarUrl")
+				&& item["avatarUrl"].is_string())
+				entry.imageUrl = item["avatarUrl"].get<std::string>() + "?param=120y120";
+		} catch (const std::exception&) {
+			continue; // 单条脏数据跳过，不要让整次搜索失败
+		}
 		items->push_back(entry);
 	}
 
@@ -396,7 +406,17 @@ bool FetchSongListJson(const std::string& url,
 	}
 
 	songs->clear();
-	const json list = unwrap(document);
+
+	json list;
+	try {
+		list = unwrap(document);
+	} catch (const std::exception& exception) {
+		// 有些歌单（比如"下载"）返回的结构跟普通歌单不一样，
+		// 这里不着可以抛出去 —— 线程里未捕获的异常会让整个程序 abort
+		if (error != nullptr)
+			*error = std::string("结果解析失败: ") + exception.what();
+		return false;
+	}
 	if (!list.is_array())
 		return true;
 
@@ -424,6 +444,68 @@ bool NeteaseApi::FetchPlaylistSongs(long long id, std::vector<Song>* songs,
 			return json();
 		},
 		songs, error);
+}
+
+bool NeteaseApi::FetchPlaylistPage(long long id, std::string* name,
+	std::string* coverUrl, std::string* creator, std::vector<Song>* songs,
+	std::string* error)
+{
+	const Response response = HttpGet(
+		"https://music.163.com/api/v6/playlist/detail?id="
+			+ std::to_string(id) + "&n=500",
+		BuildApiHeaders());
+	if (!response.Ok()) {
+		if (error != nullptr)
+			*error = response.error.empty()
+				? "HTTP " + std::to_string(response.status)
+				: response.error;
+		return false;
+	}
+
+	json document;
+	try {
+		document = json::parse(response.body);
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("JSON parse failed: ") + exception.what();
+		return false;
+	}
+
+	if (!document.contains("code") || document["code"].get<int>() != 200) {
+		if (error != nullptr)
+			*error = "API code " + document.value("code", -1);
+		return false;
+	}
+
+	if (document.contains("playlist") && document["playlist"].is_object()) {
+		const json& playlist = document["playlist"];
+		if (name != nullptr)
+			*name = playlist.value("name", "");
+		if (coverUrl != nullptr)
+			*coverUrl = playlist.value("coverImgUrl", "");
+		if (creator != nullptr && playlist.contains("creator")
+			&& playlist["creator"].is_object())
+			*creator = playlist["creator"].value("nickname", "");
+	}
+
+	songs->clear();
+	try {
+		if (document.contains("playlist") && document["playlist"].is_object()
+			&& document["playlist"].contains("tracks")
+			&& document["playlist"]["tracks"].is_array()) {
+			for (const json& item : document["playlist"]["tracks"]) {
+				Song song;
+				ParseSongItem(item, &song);
+				if (song.id != 0)
+					songs->push_back(song);
+			}
+		}
+	} catch (const std::exception& exception) {
+		if (error != nullptr)
+			*error = std::string("结果解析失败: ") + exception.what();
+		return false;
+	}
+	return true;
 }
 
 bool NeteaseApi::FetchAlbumSongs(long long id, std::vector<Song>* songs,
@@ -698,15 +780,19 @@ bool NeteaseApi::FetchComments(long long songId, int limit, int offset,
 		if (!document.contains(key) || !document[key].is_array())
 			continue;
 		for (const json& item : document[key]) {
-			Comment comment;
-			if (item.contains("user") && item["user"].is_object())
-				comment.nickname = item["user"].value("nickname", "");
-			if (item.contains("content") && item["content"].is_string())
-				comment.content = item["content"].get<std::string>();
-			comment.likedCount = item.value("likedCount", 0);
-			if (comment.content.empty())
+			try {
+				Comment comment;
+				if (item.contains("user") && item["user"].is_object())
+					comment.nickname = item["user"].value("nickname", "");
+				if (item.contains("content") && item["content"].is_string())
+					comment.content = item["content"].get<std::string>();
+				comment.likedCount = item.value("likedCount", 0);
+				if (comment.content.empty())
+					continue;
+				comments->push_back(comment);
+			} catch (const std::exception&) {
 				continue;
-			comments->push_back(comment);
+			}
 		}
 	}
 	return true;

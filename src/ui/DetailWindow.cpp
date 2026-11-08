@@ -52,12 +52,14 @@ BString Flatten(const std::string& text, size_t limit = 100)
 
 } // namespace
 
-DetailWindow::DetailWindow(BMessenger target, bool artist)
+DetailWindow::DetailWindow(BMessenger target, int kind)
 	: BWindow(BRect(0, 0, 760, 560),
-		  artist ? B_TRANSLATE("歌手") : B_TRANSLATE("专辑"), B_TITLED_WINDOW,
-		  B_QUIT_ON_WINDOW_CLOSE)
+		  kind == kDetailArtist ? B_TRANSLATE("歌手")
+		  : kind == kDetailPlaylist ? B_TRANSLATE("歌单")
+									: B_TRANSLATE("专辑"),
+		  B_TITLED_WINDOW, B_QUIT_ON_WINDOW_CLOSE)
 	, fTarget(target)
-	, fIsArtist(artist)
+	, fKind(kind)
 {
 	fImage = new CoverView();
 	fImage->SetExplicitMinSize(BSize(120, 120));
@@ -97,7 +99,7 @@ DetailWindow::DetailWindow(BMessenger target, bool artist)
 		.Add(fSongsList, 1.0f)
 		.End();
 
-	if (fIsArtist) {
+	if (fKind == kDetailArtist) {
 		tabs = new BTabView("detail-tabs", B_WIDTH_FROM_LABEL);
 		tabs->SetBorder(B_NO_BORDER);
 		BTab* songsTab = new BTab();
@@ -108,7 +110,7 @@ DetailWindow::DetailWindow(BMessenger target, bool artist)
 		content = songsCard;
 	}
 
-	if (fIsArtist) {
+	if (fKind == kDetailArtist) {
 		fAlbumList = new BListView("detail-albums", B_SINGLE_SELECTION_LIST);
 		fAlbumList->SetInvocationMessage(new BMessage(kMessageDetailAlbumOpen));
 		BGroupView* albumsCard = new BGroupView("detail-albums", B_VERTICAL,
@@ -162,6 +164,24 @@ void DetailWindow::LoadAlbum(long long id, const char* name)
 
 	auto* job = new Job{this, id};
 	thread_id thread = spawn_thread(_AlbumThread, "ncm-album",
+		B_NORMAL_PRIORITY, job);
+	if (thread < B_OK) {
+		delete job;
+		return;
+	}
+	resume_thread(thread);
+}
+
+void DetailWindow::LoadPlaylist(long long id, const char* name)
+{
+	SetTitle(name != nullptr && name[0] != '\0' ? name
+											   : B_TRANSLATE("歌单"));
+	if (fLoaded)
+		return;
+	fLoaded = true;
+
+	auto* job = new Job{this, id};
+	thread_id thread = spawn_thread(_PlaylistThread, "ncm-playlist",
 		B_NORMAL_PRIORITY, job);
 	if (thread < B_OK) {
 		delete job;
@@ -331,6 +351,82 @@ int32 DetailWindow::_AlbumThread(void* data)
 	return 0;
 }
 
+int32 DetailWindow::_PlaylistThread(void* data)
+{
+	auto* job = static_cast<Job*>(data);
+	DetailWindow* window = job->window;
+	const long long id = job->id;
+	delete job;
+
+	ncm::NeteaseApi api;
+	std::string error;
+
+	std::string name;
+	std::string coverUrl;
+	std::string creator;
+	std::vector<ncm::Song> songs;
+	if (!api.FetchPlaylistPage(id, &name, &coverUrl, &creator, &songs,
+		&error)) {
+		BMessage failure(kMessageDetailFail);
+		failure.AddString("text",
+			Prefixed(B_TRANSLATE("载入歌单失败: "), error).String());
+		if (window->Lock()) {
+			window->PostMessage(&failure);
+			window->Unlock();
+		}
+		return 0;
+	}
+
+	if (!coverUrl.empty()) {
+		const std::string path = ncm::CacheDir() + "/playlist_"
+			+ std::to_string(id) + ".jpg";
+		struct stat st;
+		if (stat(path.c_str(), &st) != 0 || st.st_size < 1024)
+			api.DownloadCover(coverUrl + "?param=300y300", path, &error);
+	}
+
+	if (window->Lock()) {
+		window->fSongs = songs;
+		window->Unlock();
+	}
+
+	BMessage ready(kMessageDetailReady);
+	ready.AddString("title", name.c_str());
+	BString meta(creator.c_str());
+	if (!songs.empty())
+		meta << B_TRANSLATE("    ") << songs.size() << B_TRANSLATE(" 首");
+	ready.AddString("meta", meta.String());
+
+	if (!coverUrl.empty()) {
+		const std::string path = ncm::CacheDir() + "/playlist_"
+			+ std::to_string(id) + ".jpg";
+		ready.AddString("image", path.c_str());
+	}
+
+	if (window->Lock()) {
+		window->PostMessage(&ready);
+		window->Unlock();
+	}
+
+	// 列表封面慢慢补
+	for (const ncm::Song& song : songs) {
+		if (song.coverUrl.empty())
+			continue;
+		const std::string path = ncm::CoverPath(song.id);
+		struct stat st;
+		if (stat(path.c_str(), &st) == 0 && st.st_size > 1024)
+			continue;
+		api.DownloadCover(song.coverUrl + "?param=120y120", path, &error);
+	}
+
+	BMessage covers(kMessageDetailCovers);
+	if (window->Lock()) {
+		window->PostMessage(&covers);
+		window->Unlock();
+	}
+	return 0;
+}
+
 void DetailWindow::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
@@ -366,7 +462,8 @@ void DetailWindow::MessageReceived(BMessage* message)
 			if (message->FindInt64("id", &id) != B_OK || id <= 0)
 				return;
 			auto* window = new DetailWindow(fTarget,
-				message->what == kMessageOpenArtist);
+				message->what == kMessageOpenArtist ? kDetailArtist
+													: kDetailAlbum);
 			if (message->what == kMessageOpenArtist)
 				window->LoadArtist(id, "");
 			else
@@ -419,7 +516,7 @@ void DetailWindow::MessageReceived(BMessage* message)
 			if (index < 0 || index >= static_cast<int32>(fAlbums.size()))
 				return;
 
-			auto* window = new DetailWindow(fTarget, false);
+			auto* window = new DetailWindow(fTarget, kDetailAlbum);
 			window->LoadAlbum(fAlbums[index].id, fAlbums[index].name.c_str());
 			window->Show();
 			return;

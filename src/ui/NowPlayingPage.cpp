@@ -1,6 +1,7 @@
 #include "NowPlayingPage.h"
 
 #include "CoverView.h"
+#include "ThemeColor.h"
 
 #include <Button.h>
 #include <Catalog.h>
@@ -9,10 +10,7 @@
 #include <Font.h>
 #include <GroupView.h>
 #include <LayoutBuilder.h>
-#include <ScrollView.h>
 #include <StringView.h>
-#include <TabView.h>
-#include <TextView.h>
 #include <TranslationUtils.h>
 
 #include <algorithm>
@@ -101,7 +99,7 @@ void ParseLrc(const std::string& text, std::vector<RawLine>* out)
 		else if (firstNonSpace > 0)
 			line = line.substr(firstNonSpace);
 
-		// 只有时间标签没有词的行不画（旧实现在这里重复塞了一次）
+		// 只有时间标签没有词的行不画
 		if (!stamps.empty() && !line.empty()) {
 			for (double stamp : stamps)
 				out->push_back({stamp, line});
@@ -127,111 +125,6 @@ BString ReadFileText(const char* path)
 	return text;
 }
 
-// 背景模糊：按块求均值降采样到 small x small，再跑两轮 3x3 盒式模糊，
-// 绘制时双线性放大。Haiku 没有现成的模糊 API，这个观感够用。
-BBitmap* MakeBlurredCover(const BBitmap* source, int32 small = 36)
-{
-	if (source == nullptr || !source->IsValid())
-		return nullptr;
-
-	const color_space space = source->ColorSpace();
-	if (space != B_RGB32 && space != B_RGBA32 && space != B_RGB24)
-		return nullptr;
-
-	const BRect bounds = source->Bounds();
-	const int32 width = static_cast<int32>(bounds.Width()) + 1;
-	const int32 height = static_cast<int32>(bounds.Height()) + 1;
-	if (width <= 0 || height <= 0 || small <= 0)
-		return nullptr;
-
-	const uchar* pixels = static_cast<const uchar*>(source->Bits());
-	const int32 rowBytes = source->BytesPerRow();
-	const int32 pixelSize = space == B_RGB24 ? 3 : 4;
-
-	std::vector<float> red(small * small, 0.0f);
-	std::vector<float> green(small * small, 0.0f);
-	std::vector<float> blue(small * small, 0.0f);
-	std::vector<int> count(small * small, 0);
-
-	for (int32 y = 0; y < height; y++) {
-		const uchar* row = pixels + y * rowBytes;
-		const int32 by = y * small / height;
-		for (int32 x = 0; x < width; x++) {
-			const uchar* pixel = row + x * pixelSize;
-			const int32 index = by * small + (x * small / width);
-			// 小端下 B_RGB32 内存顺序是 B,G,R,A
-			blue[index] += pixel[0];
-			green[index] += pixel[1];
-			red[index] += pixel[2];
-			count[index]++;
-		}
-	}
-
-	for (int32 i = 0; i < small * small; i++) {
-		if (count[i] == 0)
-			continue;
-		red[i] /= count[i];
-		green[i] /= count[i];
-		blue[i] /= count[i];
-	}
-
-	const auto blur = [small](std::vector<float>& plane) {
-		std::vector<float> out(plane.size(), 0.0f);
-		for (int32 y = 0; y < small; y++) {
-			for (int32 x = 0; x < small; x++) {
-				float sum = 0.0f;
-				int32 n = 0;
-				for (int32 dy = -1; dy <= 1; dy++) {
-					for (int32 dx = -1; dx <= 1; dx++) {
-						const int32 xx = x + dx;
-						const int32 yy = y + dy;
-						if (xx < 0 || yy < 0 || xx >= small || yy >= small)
-							continue;
-						sum += plane[yy * small + xx];
-						n++;
-					}
-				}
-				out[y * small + x] = sum / n;
-			}
-		}
-		plane.swap(out);
-	};
-
-	for (int32 pass = 0; pass < 2; pass++) {
-		blur(red);
-		blur(green);
-		blur(blue);
-	}
-
-	BBitmap* result = new BBitmap(BRect(0, 0, small - 1, small - 1),
-		B_RGB32);
-	if (!result->IsValid()) {
-		delete result;
-		return nullptr;
-	}
-
-	uchar* destination = static_cast<uchar*>(result->Bits());
-	const int32 destinationRow = result->BytesPerRow();
-	// 往面板色方向压一档，歌词直接压在背景上也读得清
-	const rgb_color wash = ui_color(B_PANEL_BACKGROUND_COLOR);
-	const float keep = 0.55f;
-	const float mix = 1.0f - keep;
-	for (int32 y = 0; y < small; y++) {
-		uchar* row = destination + y * destinationRow;
-		for (int32 x = 0; x < small; x++) {
-			uchar* pixel = row + x * 4;
-			pixel[0] = static_cast<uchar>(blue[y * small + x] * keep
-				+ wash.blue * mix);
-			pixel[1] = static_cast<uchar>(green[y * small + x] * keep
-				+ wash.green * mix);
-			pixel[2] = static_cast<uchar>(red[y * small + x] * keep
-				+ wash.red * mix);
-			pixel[3] = 255;
-		}
-	}
-	return result;
-}
-
 } // namespace
 
 // ----------------------------------------------------------------- LinkView
@@ -242,8 +135,8 @@ LinkView::LinkView(const char* name, const char* text, uint32 what,
 	, fText(text)
 	, fSecondary(secondary)
 {
-	SetViewColor(B_TRANSPARENT_COLOR);
-	SetLowColor(B_TRANSPARENT_COLOR);
+	SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+	SetLowUIColor(ViewUIColor());
 }
 
 void LinkView::SetText(const char* text)
@@ -261,6 +154,12 @@ void LinkView::SetSecondary(bool secondary)
 {
 	fSecondary = secondary;
 	Invalidate();
+}
+
+void LinkView::SetBackground(rgb_color color)
+{
+	SetViewColor(color);
+	SetLowColor(color);
 }
 
 void LinkView::GetPreferredSize(float* width, float* height)
@@ -324,10 +223,18 @@ void LinkView::MouseMoved(BPoint where, uint32 transit,
 LrcView::LrcView()
 	: BView("lrc", B_WILL_DRAW | B_FULL_UPDATE_ON_RESIZE)
 {
-	// 不能设透明：歌词每句都会跟着当前行往上滚，透明视图不擦底色，
-	// 旧位置的字会一直留着 —— 这就是"歌词重复显示"的来源
-	SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
-	SetLowUIColor(ViewUIColor());
+	// 不透明：歌词每句都会跟着当前行往上滚，透明视图不擦旧位置的字
+	fBackground = ui_color(B_PANEL_BACKGROUND_COLOR);
+	SetViewColor(fBackground);
+	SetLowColor(fBackground);
+}
+
+void LrcView::SetBackground(rgb_color color)
+{
+	fBackground = color;
+	SetViewColor(color);
+	SetLowColor(color);
+	Invalidate();
 }
 
 void LrcView::SetLyric(const BString& lrc, const BString& translation,
@@ -418,6 +325,8 @@ void LrcView::FrameResized(float, float)
 
 void LrcView::Draw(BRect)
 {
+	FillRect(Bounds(), B_SOLID_LOW);
+
 	const int32 count = static_cast<int32>(fLines.size());
 	font_height fh;
 	GetFontHeight(&fh);
@@ -507,13 +416,13 @@ NowPlayingBadge::NowPlayingBadge()
 {
 	SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
 	SetLowUIColor(ViewUIColor());
-	SetExplicitMinSize(BSize(300.0f, 56.0f));
+	SetExplicitMinSize(BSize(220.0f, 56.0f));
 	SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, 56.0f));
 }
 
 void NowPlayingBadge::GetPreferredSize(float* width, float* height)
 {
-	*width = 300.0f;
+	*width = 220.0f;
 	*height = 56.0f;
 }
 
@@ -547,8 +456,7 @@ void NowPlayingBadge::Draw(BRect)
 			B_FILTER_BITMAP_BILINEAR);
 		SetDrawingMode(B_OP_COPY);
 	} else {
-		SetHighColor(tint_color(ui_color(B_PANEL_BACKGROUND_COLOR),
-			B_DARKEN_2_TINT));
+		SetHighColor(tint_color(ViewColor(), B_DARKEN_2_TINT));
 		FillRect(coverRect);
 	}
 
@@ -587,14 +495,13 @@ void NowPlayingBadge::MouseDown(BPoint where)
 // ----------------------------------------------------------- NowPlayingView
 
 NowPlayingView::NowPlayingView()
-	: BView("now-playing", B_WILL_DRAW | B_FULL_UPDATE_ON_RESIZE)
+	: BView("now-playing", B_WILL_DRAW)
 {
-	SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
-	SetLowUIColor(ViewUIColor());
+	fTheme = ui_color(B_PANEL_BACKGROUND_COLOR);
+	SetViewColor(fTheme);
+	SetLowColor(fTheme);
 
 	fCover = new CoverView();
-	fCover->SetViewColor(B_TRANSPARENT_COLOR); // 让模糊背景透出来
-	fCover->SetLowColor(B_TRANSPARENT_COLOR);
 	fCover->SetPadding(0.0f);
 	fCover->SetExplicitMinSize(BSize(300, 300));
 	fCover->SetExplicitMaxSize(BSize(300, 300));
@@ -618,17 +525,13 @@ NowPlayingView::NowPlayingView()
 	fTransToggle->SetTarget(this);
 	fRomaToggle->SetTarget(this);
 
-	fComments = new BTextView("comments");
-	fComments->MakeEditable(false);
-	fComments->SetWordWrap(true);
-	fComments->SetInsets(8.0f, 8.0f, 8.0f, 8.0f);
-	fComments->SetViewUIColor(B_DOCUMENT_BACKGROUND_COLOR);
-
-	BGroupView* lyricCard = new BGroupView("lyric-card", B_VERTICAL, 0.0f);
-	lyricCard->SetViewColor(B_TRANSPARENT_COLOR);
-	BLayoutBuilder::Group<>(lyricCard, B_VERTICAL, 0.0f)
+	fInfo = new BGroupView("np-info", B_VERTICAL, B_USE_SMALL_SPACING);
+	BLayoutBuilder::Group<>(static_cast<BGroupView*>(fInfo), B_VERTICAL,
+		B_USE_SMALL_SPACING)
+		.Add(fTitle, 0.0f)
+		.Add(fArtist, 0.0f)
+		.Add(fAlbum, 0.0f)
 		.AddGroup(B_HORIZONTAL, B_USE_SMALL_SPACING, 0.0f)
-			.SetInsets(0, 2, 4, 0)
 			.AddGlue()
 			.Add(fTransToggle)
 			.Add(fRomaToggle)
@@ -636,35 +539,8 @@ NowPlayingView::NowPlayingView()
 		.Add(fLrc, 1.0f)
 		.End();
 
-	auto* tabs = new BTabView("np-tabs", B_WIDTH_FROM_LABEL);
-	tabs->SetBorder(B_NO_BORDER);
-	tabs->ContainerView()->SetViewColor(B_TRANSPARENT_COLOR);
-	fTabs = tabs;
-
-	BTab* lyricTab = new BTab();
-	tabs->AddTab(lyricCard, lyricTab);
-	lyricTab->SetLabel(B_TRANSLATE("歌词"));
-
-	BScrollView* commentScroll = new BScrollView("comments-scroll", fComments,
-		0, false, true);
-	BTab* commentTab = new BTab();
-	tabs->AddTab(commentScroll, commentTab);
-	commentTab->SetLabel(B_TRANSLATE("评论"));
-
 	BButton* back = new BButton("np-back", B_TRANSLATE("← 返回列表"),
 		new BMessage(kMessageNowPlayingClose));
-
-	BGroupView* info = new BGroupView("np-info", B_VERTICAL,
-		B_USE_SMALL_SPACING);
-	info->SetViewColor(B_TRANSPARENT_COLOR);
-	// 三行文字必须 weight 0：给 1 的话竖向会平分剩余空间，文字被拉高，
-	// 等歌词加载完再缩回去 —— 布局动过、旧位置的像素没人擦，屏幕上就重影了
-	BLayoutBuilder::Group<>(info, B_VERTICAL, B_USE_SMALL_SPACING)
-		.Add(fTitle, 0.0f)
-		.Add(fArtist, 0.0f)
-		.Add(fAlbum, 0.0f)
-		.Add(tabs, 1.0f)
-		.End();
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, B_USE_DEFAULT_SPACING)
 		.SetInsets(B_USE_WINDOW_INSETS)
@@ -674,63 +550,50 @@ NowPlayingView::NowPlayingView()
 			.End()
 		.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING, 1.0f)
 			.Add(fCover)
-			.Add(info, 1.0f)
+			.Add(fInfo, 1.0f)
 			.End()
 		.End();
 
 	_RefreshToggles();
 }
 
+void NowPlayingView::SetThemeColor(rgb_color color)
+{
+	fTheme = color;
+	SetViewColor(color);
+	SetLowColor(color);
+	if (fInfo != nullptr) {
+		fInfo->SetViewColor(color);
+		fInfo->SetLowColor(color);
+	}
+	if (fLrc != nullptr)
+		fLrc->SetBackground(color);
+	if (fArtist != nullptr)
+		fArtist->SetBackground(color);
+	if (fAlbum != nullptr)
+		fAlbum->SetBackground(color);
+	Invalidate();
+}
+
 void NowPlayingView::SetSong(const BString& title, const BString& artist,
 	long long artistId, const BString& album, long long albumId,
 	const BString& coverPath, const BString& lyricPath,
-	const BString& translationPath, const BString& romajiPath,
-	const BString& commentsPath)
+	const BString& translationPath, const BString& romajiPath)
 {
 	fTitle->SetText(title);
 	fArtist->SetText(artist.IsEmpty() ? B_TRANSLATE("未知歌手") : artist.String());
 	fArtist->SetId(artistId);
 	fAlbum->SetText(album.IsEmpty() ? B_TRANSLATE("未知专辑") : album.String());
 	fAlbum->SetId(albumId);
-
-	BBitmap* cover = BTranslationUtils::GetBitmapFile(coverPath.String());
-	delete fBackdrop;
-	fBackdrop = MakeBlurredCover(cover);
-	fCover->SetBitmap(cover); // 接管所有权
-	_ApplyBackdrop();
+	fCover->SetBitmap(BTranslationUtils::GetBitmapFile(coverPath.String()));
 
 	_LoadLyric(lyricPath, translationPath, romajiPath);
-	_LoadComments(commentsPath);
 
-	// BStringView 的宽度是跟着文字走的，而 SetText 不会让父布局重排；
-	// 不手动重排 + 整体重绘，屏幕上就会留下按旧尺寸画的残影（tab 条/歌词重一份）
+	// 文字宽度变了 BStringView 不会自己让父布局重排，不重排就会留下旧残影
 	InvalidateLayout(true);
 	Invalidate();
 	if (Window() != nullptr)
 		Window()->UpdateIfNeeded();
-}
-
-void NowPlayingView::_ApplyBackdrop()
-{
-	if (fBackdrop == nullptr || !fBackdrop->IsValid())
-		return;
-
-	// 背景用视图位图（app_server 自己合成），比在自己的 Draw 里半透明画一层
-	// 稳得多：窗口缩小/子视图移动时不会留下没擦掉的旧像素
-	SetViewBitmap(fBackdrop, fBackdrop->Bounds(), Bounds(),
-		B_FOLLOW_ALL_SIDES, B_FILTER_BITMAP_BILINEAR);
-	if (fLrc != nullptr) {
-		fLrc->SetViewBitmap(fBackdrop, fBackdrop->Bounds(), fLrc->Bounds(),
-			B_FOLLOW_ALL_SIDES, B_FILTER_BITMAP_BILINEAR);
-		fLrc->Invalidate();
-	}
-	Invalidate();
-}
-
-void NowPlayingView::FrameResized(float width, float height)
-{
-	BView::FrameResized(width, height);
-	_ApplyBackdrop();
 }
 
 void NowPlayingView::_LoadLyric(const BString& lyricPath,
@@ -740,14 +603,6 @@ void NowPlayingView::_LoadLyric(const BString& lyricPath,
 		ReadFileText(translationPath.String()),
 		ReadFileText(romajiPath.String()));
 	_RefreshToggles();
-}
-
-void NowPlayingView::_LoadComments(const BString& commentsPath)
-{
-	const BString text = ReadFileText(commentsPath.String());
-	fComments->SetText(text.IsEmpty() ? B_TRANSLATE("（没有评论）")
-									 : text.String());
-	fComments->ScrollTo(0.0f, 0.0f);
 }
 
 void NowPlayingView::_RefreshToggles()
@@ -765,12 +620,6 @@ void NowPlayingView::_RefreshToggles()
 	fTransToggle->SetValue(fLrc->HasTranslation() ? B_CONTROL_ON
 												 : B_CONTROL_OFF);
 	fRomaToggle->SetValue(B_CONTROL_OFF);
-}
-
-void NowPlayingView::SelectTab(int32 index)
-{
-	if (fTabs != nullptr && index >= 0 && index < fTabs->CountTabs())
-		fTabs->Select(index);
 }
 
 void NowPlayingView::SetPosition(double seconds)
@@ -795,9 +644,4 @@ void NowPlayingView::MessageReceived(BMessage* message)
 			break;
 	}
 	BView::MessageReceived(message);
-}
-
-void NowPlayingView::Draw(BRect)
-{
-	// 背景由 _ApplyBackdrop() 设的视图位图提供，这里不需要画东西
 }

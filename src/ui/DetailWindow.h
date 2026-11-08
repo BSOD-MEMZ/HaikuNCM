@@ -23,14 +23,21 @@ enum {
 	kMessagePlaySongs = 'psgs', // 让主窗口拿这批歌当播放队列
 };
 
-// 歌手页 / 专辑页：新窗口，头和网易云网页版一致（头像/封面 + 名字 + 信息），
-// 下面挂"歌曲 / 专辑"两个 tab，列表直接沿用主窗口的歌曲表外观。
+enum DetailKind {
+	kDetailArtist = 0,
+	kDetailAlbum = 1,
+	kDetailPlaylist = 2,
+};
+
+// 歌手页 / 专辑页 / 歌单页：新窗口，头部是头像·封面 + 名字 + 信息，
+// 下面挂"歌曲 / 专辑"tab，列表直接沿用主窗口的歌曲表外观。
 class DetailWindow : public BWindow {
 public:
-	DetailWindow(BMessenger target, bool artist);
+	DetailWindow(BMessenger target, int kind);
 
 	void LoadArtist(long long id, const char* name);
 	void LoadAlbum(long long id, const char* name);
+	void LoadPlaylist(long long id, const char* name);
 
 	// 调用方需先 Lock() 本窗口
 	const std::vector<ncm::Song>& Songs() const { return fSongs; }
@@ -44,9 +51,10 @@ private:
 
 	static int32 _ArtistThread(void* data);
 	static int32 _AlbumThread(void* data);
+	static int32 _PlaylistThread(void* data);
 
 	BMessenger fTarget;
-	bool fIsArtist;
+	int fKind;
 	bool fLoaded = false;
 
 	CoverView* fImage = nullptr;

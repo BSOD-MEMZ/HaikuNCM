@@ -10,8 +10,6 @@
 
 class BCheckBox;
 class BStringView;
-class BTabView;
-class BTextView;
 class CoverView;
 
 enum {
@@ -19,6 +17,7 @@ enum {
 	kMessageNowPlayingClose = 'npcx', // 播放页的返回按钮
 	kMessageOpenArtist = 'opat',      // 点歌手名 -> 歌手页（id）
 	kMessageOpenAlbum = 'opal',       // 点专辑名 -> 专辑页（id）
+	kMessageShowComments = 'shcm',    // 底板的评论按钮
 	kMessageToggleTrans = 'ttrn',
 	kMessageToggleRoma = 'trom',
 };
@@ -31,6 +30,7 @@ public:
 	void SetText(const char* text);
 	void SetId(long long id);
 	void SetSecondary(bool secondary);
+	void SetBackground(rgb_color color);
 
 	void Draw(BRect updateRect) override;
 	void MouseDown(BPoint where) override;
@@ -45,7 +45,8 @@ private:
 	bool fHover = false;
 };
 
-// LRC 歌词视图：原文 / 翻译 / 罗马音三层，当前行居中高亮
+// LRC 歌词视图：原文 / 翻译 / 罗马音三层，当前行居中高亮。
+// 背景必须不透明：歌词会跟着当前行滚，透明视图不擦旧位置的字。
 class LrcView : public BView {
 public:
 	LrcView();
@@ -55,6 +56,7 @@ public:
 	void SetShowTranslation(bool show);
 	void SetShowRoman(bool show);
 	void SetPosition(double seconds);
+	void SetBackground(rgb_color color);
 
 	bool HasTranslation() const { return fHasTranslation; }
 	bool HasRoman() const { return fHasRoman; }
@@ -76,6 +78,7 @@ private:
 	bool fShowTranslation = true;
 	bool fShowRoman = false;
 	int32 fCurrent = -1;
+	rgb_color fBackground;
 };
 
 // 底部徽章：小封面 + 曲名/歌手，点击在列表/播放页之间切换
@@ -97,8 +100,8 @@ private:
 	BBitmap* fCover = nullptr;
 };
 
-// 播放页：嵌在主窗口内容区（把歌曲列表换掉），底部播放控件始终保留。
-// 背景是模糊过的大封面（Haiku 没有现成的模糊 API，本地做降采样 + box blur）。
+// 播放页：嵌在主窗口内容区（封面 + 歌词），底部播放控件始终保留。
+// 背景是面板色混了封面主题色（30%），整页一个不透明底色。
 class NowPlayingView : public BView {
 public:
 	NowPlayingView();
@@ -106,20 +109,15 @@ public:
 	void SetSong(const BString& title, const BString& artist,
 		long long artistId, const BString& album, long long albumId,
 		const BString& coverPath, const BString& lyricPath,
-		const BString& translationPath, const BString& romajiPath,
-		const BString& commentsPath);
+		const BString& translationPath, const BString& romajiPath);
 	void SetPosition(double seconds);
-	void SelectTab(int32 index); // 0 歌词 / 1 评论
+	void SetThemeColor(rgb_color color);
 
 	void MessageReceived(BMessage* message) override;
-	void Draw(BRect updateRect) override;
-	void FrameResized(float width, float height) override;
 
 private:
-	void _ApplyBackdrop();
 	void _LoadLyric(const BString& lyricPath, const BString& translationPath,
 		const BString& romajiPath);
-	void _LoadComments(const BString& commentsPath);
 	void _RefreshToggles();
 
 	CoverView* fCover = nullptr;
@@ -127,13 +125,11 @@ private:
 	LinkView* fArtist = nullptr;
 	LinkView* fAlbum = nullptr;
 	LrcView* fLrc = nullptr;
-	BTextView* fComments = nullptr;
 	BCheckBox* fTransToggle = nullptr;
 	BCheckBox* fRomaToggle = nullptr;
-	BView* fToggleRow = nullptr;
-	BTabView* fTabs = nullptr;
+	BView* fInfo = nullptr;
 
-	BBitmap* fBackdrop = nullptr;
+	rgb_color fTheme;
 };
 
 #endif

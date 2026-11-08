@@ -17,6 +17,7 @@ public:
 		kNext,
 		kHeart,
 		kHeartFilled,
+		kComment,
 	};
 
 	TransportButton(const char* name, Kind kind, const char* tooltip,
@@ -37,6 +38,7 @@ private:
 	BShape* _PlayShape(float height) const;
 	BShape* _PauseShape(float height) const;
 	BShape* _HeartShape(float height) const;
+	BShape* _CommentShape(float height) const;
 
 	void _DrawGlyph(BRect bounds, const rgb_color& base);
 

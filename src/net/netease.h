@@ -22,6 +22,7 @@ struct GenericItem {
 	long long id = 0;
 	std::string name;
 	std::string subtitle;
+	std::string imageUrl; // 歌手头像 / 用户头像
 };
 
 struct ArtistInfo {
@@ -77,6 +78,10 @@ public:
 
 	bool FetchPlaylistSongs(long long id, std::vector<Song>* songs,
 		std::string* error);
+	// 歌单页：封面 + 名字 + 创建者 + 全部歌曲
+	bool FetchPlaylistPage(long long id, std::string* name,
+		std::string* coverUrl, std::string* creator,
+		std::vector<Song>* songs, std::string* error);
 	bool FetchAlbumSongs(long long id, std::vector<Song>* songs,
 		std::string* error);
 	bool FetchArtistSongs(long long id, std::vector<Song>* songs,
