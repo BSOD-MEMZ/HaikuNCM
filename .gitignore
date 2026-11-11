@@ -9,8 +9,11 @@ ncmcli
 probe_sample.*
 *.mp3
 
-# 工具与记忆
-.workbuddy/
+# 工具与记忆：.workbuddy/ 要提交，跨机器同步记忆和构建脚本
+# 只排除本机产生的临时状态
+.workbuddy/vmtools/.last-sync-hash
+__pycache__/
+*.pyc
 
 # 解码验证产物
 probe_decoded.wav

@@ -1,0 +1,4 @@
+# Haiku 端执行的脚本必须是 LF，否则 shebang 会带上 \r 直接跑不起来
+*.sh text eol=lf
+*.py text eol=lf
+Makefile text eol=lf

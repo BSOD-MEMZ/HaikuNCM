@@ -20,6 +20,7 @@
 #include <CardView.h>
 #include <Catalog.h>
 #include <GroupView.h>
+#include <GroupLayout.h>
 #include <LayoutBuilder.h>
 #include <ListView.h>
 #include <Menu.h>
@@ -140,6 +141,111 @@ struct PlayJob {
 
 } // namespace
 
+// 临时调试：把真实视图坐标写到 /tmp/ncm_layout.txt（定位菜单栏上方 17px 空隙）
+static int32 _DumpLayoutThread(void* data)
+{
+	auto* window = static_cast<MainWindow*>(data);
+	snooze(2500000);
+	if (window->Lock()) {
+		FILE* f = fopen("/tmp/ncm_layout.txt", "w");
+		if (f != nullptr) {
+			BRect b = window->Bounds();
+			fprintf(f, "window bounds: (%.0f,%.0f)-(%.0f,%.0f)\n", b.left,
+				b.top, b.right, b.bottom);
+			BLayout* layout = window->GetLayout();
+			fprintf(f, "window layout: %s\n",
+				layout != nullptr ? "present" : "null");
+			for (int32 i = 0; i < window->CountChildren(); i++) {
+				BView* child = window->ChildAt(i);
+				BRect cf = child->Frame();
+				float pw = 0, ph = 0;
+				child->GetPreferredSize(&pw, &ph);
+				fprintf(f,
+					"child[%d] %s frame=(%.0f,%.0f)-(%.0f,%.0f) pref=%.1fx%.1f\n",
+					(int)i, child->Name(), cf.left, cf.top, cf.right, cf.bottom,
+					pw, ph);
+				for (int32 j = 0; j < child->CountChildren(); j++) {
+					BView* sub = child->ChildAt(j);
+					BRect sf = sub->Frame();
+					float sw = 0, sh = 0;
+					sub->GetPreferredSize(&sw, &sh);
+					fprintf(f,
+						"    sub[%d] %s frame=(%.0f,%.0f)-(%.0f,%.0f) pref=%.1fx%.1f min=%.1fx%.1f max=%.1fx%.1f\n",
+						(int)j, sub->Name(), sf.left, sf.top, sf.right,
+						sf.bottom, sw, sh, sub->ExplicitMinSize().width,
+						sub->ExplicitMinSize().height,
+						sub->ExplicitMaxSize().width,
+						sub->ExplicitMaxSize().height);
+				}
+				BGroupLayout* groupLayout
+					= dynamic_cast<BGroupLayout*>(child->GetLayout());
+				if (groupLayout != nullptr) {
+					fprintf(f, "    [group items=%d orientation=%d]\n",
+						(int)groupLayout->CountItems(),
+						(int)groupLayout->Orientation());
+					for (int32 k = 0; k < groupLayout->CountItems(); k++) {
+						BLayoutItem* item = groupLayout->ItemAt(k);
+						BSize ip = item->PreferredSize();
+						BSize im = item->MinSize();
+						BSize ix = item->MaxSize();
+						fprintf(f,
+							"      item[%d] pref=%.1fx%.1f min=%.1fx%.1f max=%.1fx%.1f\n",
+							(int)k, ip.width, ip.height, im.width, im.height,
+							ix.width, ix.height);
+					}
+				}
+			}
+			fclose(f);
+		}
+		window->Unlock();
+	}
+	return 0;
+}
+
+// BMenuBar 的 MinSize() 走菜单内部布局，会把每个顶级菜单的高度竖着累加
+// （4 个菜单 → 84px），而 BGroupLayout 正是用 MinSize 分配槽位，于是菜单栏被
+// 塞进 84px 的槽里居中，顶上露出一条窗口底色。ComposeSize 取较大值，给菜单栏
+// 设 ExplicitMinSize 也压不住它。这个宿主视图自己摆放菜单栏、只对外报一个行高。
+namespace {
+
+class MenuBarRow : public BView {
+public:
+	MenuBarRow(BMenuBar* mainBar, BMenuBar* userBar)
+		: BView("menu-bar-row", B_WILL_DRAW)
+		, fMainBar(mainBar)
+		, fUserBar(userBar)
+	{
+		fHeight = mainBar->PreferredSize().height;
+		SetViewUIColor(B_MENU_BACKGROUND_COLOR);
+		AddChild(mainBar);
+		AddChild(userBar);
+		SetExplicitMinSize(BSize(B_SIZE_UNSET, fHeight));
+		SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, fHeight));
+	}
+
+	void AttachedToWindow() override { _Relayout(); }
+	void FrameResized(float, float) override { _Relayout(); }
+
+private:
+	void _Relayout()
+	{
+		if (Bounds().Width() <= 0 || fHeight <= 0)
+			return;
+
+		const float userWidth = fUserBar->PreferredSize().width;
+		fUserBar->MoveTo(Bounds().Width() - userWidth, 0);
+		fUserBar->ResizeTo(userWidth, fHeight);
+		fMainBar->MoveTo(0, 0);
+		fMainBar->ResizeTo(Bounds().Width() - userWidth, fHeight);
+	}
+
+	BMenuBar* fMainBar;
+	BMenuBar* fUserBar;
+	float fHeight = 0.0f;
+};
+
+} // namespace
+
 MainWindow::MainWindow()
 	: BWindow(BRect(70, 60, 930, 700), "HaikuNCM", B_TITLED_WINDOW,
 		  B_QUIT_ON_WINDOW_CLOSE)
@@ -149,6 +255,8 @@ MainWindow::MainWindow()
 
 	fMenuBar = new BMenuBar("menubar");
 	_BuildMenu();
+
+	// 登录菜单：照抄 HaikuDepot —— 主菜单栏 + 右侧等高的用户菜单栏
 	fUserMenuBar = new BMenuBar("user-menubar");
 	fUserItem = new BMenuItem(B_TRANSLATE("登录…"), new BMessage(kMessageLogin));
 	fUserMenu = new BMenu(B_TRANSLATE("未登录"));
@@ -159,8 +267,6 @@ MainWindow::MainWindow()
 	fUserMenu->AddItem(logoutItem);
 	fLogoutItem = logoutItem;
 	fUserMenuBar->AddItem(fUserMenu);
-	fUserMenuBar->SetExplicitMaxSize(BSize(B_SIZE_UNSET,
-		fMenuBar->MaxSize().height));
 
 	// 登录菜单：照抄 HaikuDepot —— 主菜单栏 + 右侧等高的用户菜单栏
 	fSearchField = new BTextControl("search", B_TRANSLATE("搜索"), "",
@@ -182,18 +288,21 @@ MainWindow::MainWindow()
 		.Add(fSearchButton)
 		.End();
 
-	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
-		.AddGroup(B_HORIZONTAL, 0, 0.0f)
-			.Add(fMenuBar, 1.0f)
-			.Add(fUserMenuBar, 0.0f)
-			.End()
-		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING, 1.0f)
-			.SetInsets(B_USE_WINDOW_INSETS)
-			.Add(fSearchRow, 0.0f)
-			.Add(fContentHost, 1.0f)
-			.End()
-		.Add(fTransport, 0.0f)
-		.End();
+	// 菜单栏是根布局的第一项，weight 0
+	BView* mainArea = new BView("main-area", 0);
+	BGroupLayout* mainLayout = new BGroupLayout(B_VERTICAL,
+		B_USE_DEFAULT_SPACING);
+	mainLayout->SetInsets(B_USE_WINDOW_INSETS);
+	mainArea->SetLayout(mainLayout);
+	mainLayout->AddView(fSearchRow, 0.0f);
+	mainLayout->AddView(fContentHost, 1.0f);
+
+	BGroupLayout* rootLayout = new BGroupLayout(B_VERTICAL, 0.0f);
+	rootLayout->SetInsets(0.0f, 0.0f, 0.0f, 0.0f);
+	SetLayout(rootLayout);
+	rootLayout->AddView(new MenuBarRow(fMenuBar, fUserMenuBar), 0.0f);
+	rootLayout->AddView(mainArea, 1.0f);
+	rootLayout->AddView(fTransport, 0.0f);
 
 	SetSizeLimits(760, 4000, 420, 4000);
 	ResizeTo(860, 640);
@@ -201,6 +310,14 @@ MainWindow::MainWindow()
 
 	fTicker = new BMessageRunner(BMessenger(this), new BMessage(kMessageTick),
 		500000);
+
+	// 布局调试：NCM_LAYOUT_DEBUG=1 启动时把真实视图坐标写到 /tmp/ncm_layout.txt
+	if (getenv("NCM_LAYOUT_DEBUG") != nullptr) {
+		thread_id dumpThread = spawn_thread(_DumpLayoutThread, "ncm-dump",
+			B_NORMAL_PRIORITY, this);
+		if (dumpThread >= B_OK)
+			resume_thread(dumpThread);
+	}
 
 	std::string cookie;
 	std::string nickname;
@@ -400,18 +517,27 @@ void MainWindow::_BuildTransport()
 	right->SetExplicitMinSize(BSize(300, 56));
 	right->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, 56));
 
-	// 进度条压在底板最顶部，横贯整宽
+	// 进度条压在底板最顶部，横贯整宽。
+	// 两个子项都显式给 weight 0：BLayoutBuilder 的 Add/AddGroup 默认 weight=1，
+	// 不写的话窗口一拉高，进度条和整行都会被拉长，底板高度就不再恒定。
 	fTransport = new BGroupView("transport", B_VERTICAL, 0.0f);
 	fTransport->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
 	BLayoutBuilder::Group<>(fTransport, B_VERTICAL, 0.0f)
-		.Add(fSeek)
-		.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+		.Add(fSeek, 0.0f)
+		.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING, 0.0f)
 			.SetInsets(B_USE_WINDOW_INSETS, 2, B_USE_WINDOW_INSETS, 6)
 			.Add(left, 1.0f)
 			.Add(center, 0.0f)
 			.Add(right, 1.0f)
 			.End()
 		.End();
+
+	// 底板高度恒定：把布局算出来的首选高度同时钉成 min 和 max
+	float transportWidth = 0.0f;
+	float transportHeight = 0.0f;
+	fTransport->GetPreferredSize(&transportWidth, &transportHeight);
+	fTransport->SetExplicitMinSize(BSize(B_SIZE_UNSET, transportHeight));
+	fTransport->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, transportHeight));
 	fTransportLeft = left;
 	fTransportRight = right;
 }
